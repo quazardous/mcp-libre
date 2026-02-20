@@ -1,4 +1,4 @@
-# LibreOffice MCP Server
+# LibreOffice MCP
 
 MCP server that lets AI assistants create, read, convert and edit LibreOffice documents in real-time.
 
@@ -63,7 +63,7 @@ The extension embeds an HTTP API server inside LibreOffice (port 8765) with dire
 # Then restart LibreOffice
 ```
 
-The extension adds a **MCP Server** menu in LibreOffice with Start/Stop, Restart, Status, and About.
+The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restart, Status, and About.
 
 ## Tools
 
@@ -118,9 +118,10 @@ The extension adds a **MCP Server** menu in LibreOffice with Start/Stop, Restart
 
 ## Configuration
 
-### Claude Desktop
+Add the following MCP server entry to your config (adapt paths to your system):
 
-Config at `%APPDATA%\Claude\claude_desktop_config.json`:
+- **Claude Desktop**: `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/.config/claude/claude_desktop_config.json` (Linux)
+- **Claude Code**: `.mcp.json` at the project root
 
 ```json
 {
@@ -139,27 +140,7 @@ Config at `%APPDATA%\Claude\claude_desktop_config.json`:
 }
 ```
 
-### Claude Code
-
-Add a `.mcp.json` at the project root:
-
-```json
-{
-  "mcpServers": {
-    "libreoffice": {
-      "type": "stdio",
-      "command": "C:/Users/you/.local/bin/uv.exe",
-      "args": ["run", "python", "src/main.py"],
-      "cwd": "C:/Users/you/mcp-libre",
-      "env": {
-        "PYTHONPATH": "C:/Users/you/mcp-libre/src",
-        "MCP_LIBREOFFICE_GUI": "1",
-        "MCP_PLUGIN_URL": "http://localhost:8765"
-      }
-    }
-  }
-}
-```
+> The install scripts (`./install.sh` on Linux, `.\install.ps1` on Windows) generate the Claude Desktop configuration automatically.
 
 ## Documentation
 

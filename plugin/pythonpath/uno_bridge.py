@@ -41,6 +41,7 @@ class UNOBridge:
             self._toolkit = self.smgr.createInstanceWithContext(
                 "com.sun.star.awt.Toolkit", self.ctx)
             logger.info("UNO Bridge initialized successfully")
+            self._page_cache = {}  # (doc_url, object_name) -> page number
         except Exception as e:
             logger.error(f"Failed to initialize UNO Bridge: {e}")
             raise
@@ -48,6 +49,41 @@ class UNOBridge:
     # ----------------------------------------------------------------
     # Page index — maps paragraphs/images/tables to page numbers
     # ----------------------------------------------------------------
+
+    def _doc_key(self, doc) -> str:
+        """Return a stable key for the document (URL or id)."""
+        try:
+            return doc.getURL() or str(id(doc))
+        except Exception:
+            return str(id(doc))
+
+    def _resolve_page(self, doc, obj_name: str, anchor) -> Optional[int]:
+        """Return cached page number, or resolve via ViewCursor and cache."""
+        key = (self._doc_key(doc), obj_name)
+        if key in self._page_cache:
+            return self._page_cache[key]
+        try:
+            page = self._get_page_for_range(doc, anchor)
+            self._page_cache[key] = page
+            return page
+        except Exception:
+            return None
+
+    def invalidate_page_cache(self, file_path: str = None):
+        """Clear page cache (all or for a specific document)."""
+        if file_path is None:
+            self._page_cache.clear()
+        else:
+            self._page_cache = {
+                k: v for k, v in self._page_cache.items()
+                if k[0] != file_path}
+
+    def _store_doc(self, doc):
+        """Store document and invalidate page cache."""
+        doc.store()
+        self._page_cache = {
+            k: v for k, v in self._page_cache.items()
+            if k[0] != self._doc_key(doc)}
 
     def _annotate_pages(self, nodes, doc):
         """Add 'page' to each heading node using ViewCursor. Recursive."""
@@ -81,6 +117,41 @@ class UNOBridge:
                 break
         return self._get_page_for_range(doc, cursor)
 
+    def _anchor_para_index(self, doc, anchor) -> Optional[int]:
+        """Return the paragraph index for a text anchor, or None.
+
+        Handles images in the main text body as well as images inside
+        text frames (cadres) by walking up to the frame's anchor.
+        """
+        main_text = doc.getText()
+
+        # Determine the effective anchor range in the main text body.
+        rng = anchor
+        try:
+            anchor_text = anchor.getText()
+            if anchor_text != main_text:
+                # The anchor lives inside a frame — find that frame's
+                # own anchor in the main text.
+                if hasattr(doc, 'getTextFrames'):
+                    frames = doc.getTextFrames()
+                    for fname in frames.getElementNames():
+                        frame = frames.getByName(fname)
+                        if frame.getText() == anchor_text:
+                            rng = frame.getAnchor()
+                            break
+        except Exception:
+            pass
+
+        # Count paragraphs from the start of the main text to rng.
+        try:
+            tc = main_text.createTextCursorByRange(rng)
+            idx = 0
+            while tc.gotoPreviousParagraph(False):
+                idx += 1
+            return idx
+        except Exception:
+            return None
+
     def get_page_objects(self, page: int = None,
                          locator: str = None,
                          paragraph_index: int = None,
@@ -99,11 +170,21 @@ class UNOBridge:
                 para_idx = paragraph_index
             else:
                 # Use current view cursor page
-                page = vc.getPage()
+                try:
+                    page = vc.getPage()
+                except Exception:
+                    page = 1
                 para_idx = None
 
             if page is None and para_idx is not None:
-                page = self._get_page_for_paragraph(doc, para_idx)
+                try:
+                    page = self._get_page_for_paragraph(doc, para_idx)
+                except Exception as e:
+                    logger.warning(f"get_page_objects: cannot resolve page "
+                                   f"for paragraph {para_idx}: {e}")
+                    return {"success": False,
+                            "error": f"Cannot resolve page for paragraph "
+                                     f"{para_idx}: {e}"}
 
         # Collect images on this page
         images = []
@@ -113,7 +194,9 @@ class UNOBridge:
                 try:
                     g = graphics.getByName(name)
                     anchor = g.getAnchor()
-                    vc.gotoRange(anchor.getStart(), False)
+                    # Use the anchor range directly (not .getStart())
+                    # to avoid failures with some anchor types.
+                    vc.gotoRange(anchor, False)
                     if vc.getPage() == page:
                         size = g.getPropertyValue("Size")
                         images.append({
@@ -121,9 +204,11 @@ class UNOBridge:
                             "width_mm": size.Width // 100,
                             "height_mm": size.Height // 100,
                             "title": g.getPropertyValue("Title"),
+                            "paragraph_index": self._anchor_para_index(
+                                doc, anchor),
                         })
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"get_page_objects: skip image {name}: {e}")
 
         # Collect tables on this page
         tables = []
@@ -133,21 +218,62 @@ class UNOBridge:
                 try:
                     t = text_tables.getByName(name)
                     anchor = t.getAnchor()
-                    vc.gotoRange(anchor.getStart(), False)
+                    vc.gotoRange(anchor, False)
                     if vc.getPage() == page:
                         tables.append({
                             "name": name,
                             "rows": t.getRows().getCount(),
                             "cols": t.getColumns().getCount(),
                         })
+                except Exception as e:
+                    logger.debug(f"get_page_objects: skip table {name}: {e}")
+
+        # Collect text frames on this page
+        frames = []
+        if hasattr(doc, 'getTextFrames'):
+            text_frames = doc.getTextFrames()
+            # Find which images belong to which frame using UNO ==
+            frame_images = {}
+            for img in images:
+                iname = img["name"]
+                try:
+                    g = doc.getGraphicObjects().getByName(iname)
+                    anchor_text = g.getAnchor().getText()
+                    for fname in text_frames.getElementNames():
+                        fr = text_frames.getByName(fname)
+                        if fr.getText() == anchor_text:
+                            frame_images.setdefault(
+                                fname, []).append(iname)
+                            break
                 except Exception:
                     pass
+            for fname in text_frames.getElementNames():
+                try:
+                    fr = text_frames.getByName(fname)
+                    anchor = fr.getAnchor()
+                    vc.gotoRange(anchor, False)
+                    if vc.getPage() == page:
+                        size = fr.getPropertyValue("Size")
+                        entry = {
+                            "name": fname,
+                            "width_mm": size.Width // 100,
+                            "height_mm": size.Height // 100,
+                            "paragraph_index": self._anchor_para_index(
+                                doc, anchor),
+                        }
+                        if fname in frame_images:
+                            entry["images"] = frame_images[fname]
+                        frames.append(entry)
+                except Exception as e:
+                    logger.debug(
+                        f"get_page_objects: skip frame {fname}: {e}")
 
         return {
             "success": True,
             "page": page,
             "images": images,
             "tables": tables,
+            "frames": frames,
         }
     
     def create_document(self, doc_type: str = "writer") -> Any:
@@ -458,7 +584,7 @@ class UNOBridge:
             bookmark_map[para_idx] = bm_name
 
         if needs_bookmark and doc.hasLocation():
-            doc.store()
+            self._store_doc(doc)
 
         return bookmark_map
 
@@ -1193,7 +1319,7 @@ class UNOBridge:
             count = doc.replaceAll(replace_desc)
 
             if count > 0 and doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {
                 "success": True,
@@ -1259,7 +1385,7 @@ class UNOBridge:
                         "error": f"Invalid position: {position}"}
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {
                 "success": True,
@@ -1319,7 +1445,7 @@ class UNOBridge:
             doc_text.insertTextContent(cursor, annotation, False)
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {
                 "success": True,
@@ -1367,7 +1493,7 @@ class UNOBridge:
             removed = self._remove_ai_annotation_at(doc, para_index)
 
             if removed and doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {
                 "success": True,
@@ -1528,7 +1654,7 @@ class UNOBridge:
             doc_text.insertTextContent(cursor, annotation, False)
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True,
                     "message": f"Comment added at paragraph {paragraph_index}",
@@ -1587,7 +1713,7 @@ class UNOBridge:
                 pass  # Resolved property may not exist in older versions
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True,
                     "comment": comment_name,
@@ -1627,7 +1753,7 @@ class UNOBridge:
                 deleted += 1
 
             if deleted > 0 and doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True, "deleted": deleted,
                     "comment": comment_name}
@@ -1747,7 +1873,7 @@ class UNOBridge:
             dispatcher.executeDispatch(
                 frame, ".uno:AcceptAllTrackedChanges", "", 0, ())
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
             return {"success": True, "message": "All changes accepted"}
         except Exception as e:
             logger.error(f"Failed to accept all changes: {e}")
@@ -1764,7 +1890,7 @@ class UNOBridge:
             dispatcher.executeDispatch(
                 frame, ".uno:RejectAllTrackedChanges", "", 0, ())
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
             return {"success": True, "message": "All changes rejected"}
         except Exception as e:
             logger.error(f"Failed to reject all changes: {e}")
@@ -1950,7 +2076,7 @@ class UNOBridge:
                 cell_obj.setString(value)
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True, "table": table_name,
                     "cell": cell, "value": value}
@@ -1996,7 +2122,7 @@ class UNOBridge:
             table_name = table.getName()
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True, "table_name": table_name,
                     "rows": rows, "cols": cols}
@@ -2036,6 +2162,16 @@ class UNOBridge:
                     entry["description"] = graphic.getPropertyValue(
                         "Description")
                     entry["title"] = graphic.getPropertyValue("Title")
+                except Exception:
+                    pass
+                # Resolve anchor paragraph index and page
+                try:
+                    anchor = graphic.getAnchor()
+                    entry["paragraph_index"] = self._anchor_para_index(
+                        doc, anchor)
+                    page = self._resolve_page(doc, name, anchor)
+                    if page is not None:
+                        entry["page"] = page
                 except Exception:
                     pass
                 images.append(entry)
@@ -2095,22 +2231,65 @@ class UNOBridge:
                 except Exception:
                     pass
 
-            # Position in document — find anchor paragraph
+            # Position offsets (used when orient=NONE)
+            for prop, key in (("HoriOrientPosition", "hori_pos_mm"),
+                              ("VertOrientPosition", "vert_pos_mm")):
+                try:
+                    info[key] = graphic.getPropertyValue(prop) // 100
+                except Exception:
+                    pass
+
+            # Orientation relations
+            for prop in ("HoriOrientRelation", "VertOrientRelation"):
+                try:
+                    info[prop] = int(graphic.getPropertyValue(prop))
+                except Exception:
+                    pass
+
+            # Margins
+            for prop, key in (("TopMargin", "top_margin_mm"),
+                              ("BottomMargin", "bottom_margin_mm"),
+                              ("LeftMargin", "left_margin_mm"),
+                              ("RightMargin", "right_margin_mm")):
+                try:
+                    info[key] = graphic.getPropertyValue(prop) // 100
+                except Exception:
+                    pass
+
+            # Wrap / Surround
+            for prop in ("Surround", "TextWrapType"):
+                try:
+                    val = graphic.getPropertyValue(prop)
+                    wrap_names = {0: "NONE", 1: "COLUMN", 2: "PARALLEL",
+                                  3: "DYNAMIC", 4: "THROUGH"}
+                    ival = int(val)
+                    info["wrap"] = wrap_names.get(ival, str(ival))
+                    info["wrap_id"] = ival
+                    break
+                except Exception:
+                    pass
+
+            # Crop
+            try:
+                crop = graphic.getPropertyValue("GraphicCrop")
+                info["crop"] = {
+                    "top_mm": crop.Top // 100,
+                    "bottom_mm": crop.Bottom // 100,
+                    "left_mm": crop.Left // 100,
+                    "right_mm": crop.Right // 100,
+                }
+            except Exception:
+                pass
+
+            # Position in document — find anchor paragraph and page
             try:
                 anchor = graphic.getAnchor()
-                text = doc.getText()
-                enum = text.createEnumeration()
-                para_idx = 0
-                while enum.hasMoreElements():
-                    para = enum.nextElement()
-                    try:
-                        if text.compareRegionStarts(para, anchor) >= 0 \
-                           and text.compareRegionEnds(para, anchor) <= 0:
-                            info["paragraph_index"] = para_idx
-                            break
-                    except Exception:
-                        pass
-                    para_idx += 1
+                pidx = self._anchor_para_index(doc, anchor)
+                if pidx is not None:
+                    info["paragraph_index"] = pidx
+                page = self._resolve_page(doc, image_name, anchor)
+                if page is not None:
+                    info["page"] = page
             except Exception as pe:
                 logger.debug(f"Could not resolve image anchor: {pe}")
 
@@ -2125,8 +2304,16 @@ class UNOBridge:
                              title: str = None,
                              description: str = None,
                              anchor_type: int = None,
+                             hori_orient: int = None,
+                             vert_orient: int = None,
+                             hori_orient_relation: int = None,
+                             vert_orient_relation: int = None,
+                             crop_top_mm: int = None,
+                             crop_bottom_mm: int = None,
+                             crop_left_mm: int = None,
+                             crop_right_mm: int = None,
                              file_path: str = None) -> Dict[str, Any]:
-        """Resize, reposition, or update caption/alt-text for an image.
+        """Resize, reposition, crop, or update caption/alt-text for an image.
 
         Args:
             image_name: Name of the image/graphic object
@@ -2136,6 +2323,14 @@ class UNOBridge:
             description: Alt-text / description
             anchor_type: 0=AT_PARAGRAPH, 1=AS_CHARACTER, 2=AT_PAGE,
                          3=AT_FRAME, 4=AT_CHARACTER
+            hori_orient: 0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT
+            vert_orient: 0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM
+            hori_orient_relation: 0=PARAGRAPH, 1=FRAME, 2=PAGE, etc.
+            vert_orient_relation: 0=PARAGRAPH, 1=FRAME, 2=PAGE, etc.
+            crop_top_mm: Crop from top in mm
+            crop_bottom_mm: Crop from bottom in mm
+            crop_left_mm: Crop from left in mm
+            crop_right_mm: Crop from right in mm
         """
         try:
             doc = self._resolve_document(file_path)
@@ -2189,13 +2384,566 @@ class UNOBridge:
                           2: "AT_PAGE", 3: "AT_FRAME", 4: "AT_CHARACTER"}
                 changed.append(f"anchor={labels.get(anchor_type, anchor_type)}")
 
+            if hori_orient is not None:
+                graphic.setPropertyValue("HoriOrient", hori_orient)
+                changed.append(f"hori_orient={hori_orient}")
+
+            if vert_orient is not None:
+                graphic.setPropertyValue("VertOrient", vert_orient)
+                changed.append(f"vert_orient={vert_orient}")
+
+            if hori_orient_relation is not None:
+                graphic.setPropertyValue(
+                    "HoriOrientRelation", hori_orient_relation)
+                changed.append(f"hori_orient_relation={hori_orient_relation}")
+
+            if vert_orient_relation is not None:
+                graphic.setPropertyValue(
+                    "VertOrientRelation", vert_orient_relation)
+                changed.append(f"vert_orient_relation={vert_orient_relation}")
+
+            if any(v is not None for v in (crop_top_mm, crop_bottom_mm,
+                                           crop_left_mm, crop_right_mm)):
+                try:
+                    crop = graphic.getPropertyValue("GraphicCrop")
+                except Exception:
+                    from com.sun.star.text import GraphicCrop
+                    crop = GraphicCrop()
+                if crop_top_mm is not None:
+                    crop.Top = crop_top_mm * 100
+                if crop_bottom_mm is not None:
+                    crop.Bottom = crop_bottom_mm * 100
+                if crop_left_mm is not None:
+                    crop.Left = crop_left_mm * 100
+                if crop_right_mm is not None:
+                    crop.Right = crop_right_mm * 100
+                graphic.setPropertyValue("GraphicCrop", crop)
+                changed.append(
+                    f"crop=T{crop.Top//100}/B{crop.Bottom//100}"
+                    f"/L{crop.Left//100}/R{crop.Right//100}mm")
+
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True, "image": image_name,
                     "changes": changed}
         except Exception as e:
             logger.error(f"Failed to set image properties: {e}")
+            return {"success": False, "error": str(e)}
+
+    def insert_image(self, image_path: str,
+                     paragraph_index: int = None,
+                     locator: str = None,
+                     caption: str = None,
+                     with_frame: bool = True,
+                     width_mm: int = None,
+                     height_mm: int = None,
+                     file_path: str = None) -> Dict[str, Any]:
+        """Insert an image from a file path at a paragraph position."""
+        try:
+            import os
+            if not os.path.isfile(image_path):
+                return {"success": False,
+                        "error": f"Image file not found: {image_path}"}
+
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+            idx = 0
+            target = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if idx == paragraph_index:
+                    target = element
+                    break
+                idx += 1
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            # Convert path to file URL
+            image_url = "file://" + image_path
+            if not image_path.startswith("/"):
+                image_url = "file:///" + image_path
+
+            # Default size
+            w_100mm = (width_mm or 80) * 100   # in 1/100 mm
+            h_100mm = (height_mm or 80) * 100
+
+            from com.sun.star.awt import Size as AwtSize
+
+            if with_frame:
+                # Create text frame
+                frame = doc.createInstance(
+                    "com.sun.star.text.TextFrame")
+                frame_size = AwtSize(w_100mm, h_100mm)
+                frame.setPropertyValue("Size", frame_size)
+                frame.setPropertyValue("AnchorType", 4)  # AT_CHARACTER
+                frame.setPropertyValue("HoriOrient", 0)  # NONE
+                frame.setPropertyValue("VertOrient", 0)  # NONE
+
+                cursor = doc_text.createTextCursorByRange(target.getEnd())
+                doc_text.insertTextContent(cursor, frame, False)
+
+                # Create graphic inside the frame
+                graphic = doc.createInstance(
+                    "com.sun.star.text.TextGraphicObject")
+                graphic.setPropertyValue("GraphicURL", image_url)
+                graphic_size = AwtSize(w_100mm, h_100mm)
+                graphic.setPropertyValue("Size", graphic_size)
+                graphic.setPropertyValue("AnchorType", 0)  # AT_PARAGRAPH
+                graphic.setPropertyValue("HoriOrient", 2)  # CENTER
+                graphic.setPropertyValue("VertOrient", 1)  # TOP
+
+                frame_text = frame.getText()
+                frame_cursor = frame_text.createTextCursor()
+                frame_text.insertTextContent(
+                    frame_cursor, graphic, False)
+
+                # Add caption text if provided
+                if caption:
+                    frame_cursor = frame_text.createTextCursorByRange(
+                        frame_text.getEnd())
+                    frame_text.insertControlCharacter(
+                        frame_cursor, 0, False)  # PARAGRAPH_BREAK
+                    frame_cursor = frame_text.createTextCursorByRange(
+                        frame_text.getEnd())
+                    frame_text.insertString(frame_cursor, caption, False)
+
+                if doc.hasLocation():
+                    self._store_doc(doc)
+
+                return {"success": True,
+                        "frame_name": frame.getName(),
+                        "image_name": graphic.getName(),
+                        "with_frame": True,
+                        "caption": caption}
+            else:
+                # Standalone image (no frame)
+                graphic = doc.createInstance(
+                    "com.sun.star.text.TextGraphicObject")
+                graphic.setPropertyValue("GraphicURL", image_url)
+                graphic_size = AwtSize(w_100mm, h_100mm)
+                graphic.setPropertyValue("Size", graphic_size)
+                graphic.setPropertyValue("AnchorType", 4)  # AT_CHARACTER
+
+                cursor = doc_text.createTextCursorByRange(target.getEnd())
+                doc_text.insertTextContent(cursor, graphic, False)
+
+                if doc.hasLocation():
+                    self._store_doc(doc)
+
+                return {"success": True,
+                        "image_name": graphic.getName(),
+                        "with_frame": False}
+        except Exception as e:
+            logger.error(f"Failed to insert image: {e}")
+            return {"success": False, "error": str(e)}
+
+    def delete_image(self, image_name: str,
+                     remove_frame: bool = True,
+                     file_path: str = None) -> Dict[str, Any]:
+        """Delete an image. If inside a frame: remove_frame=True (default)
+        removes the whole frame; remove_frame=False removes only the image."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not hasattr(doc, 'getGraphicObjects'):
+                return {"success": False,
+                        "error": "Document does not support graphic objects"}
+
+            graphics = doc.getGraphicObjects()
+            if not graphics.hasByName(image_name):
+                return {"success": False,
+                        "error": f"Image '{image_name}' not found",
+                        "available": list(graphics.getElementNames())}
+
+            graphic = graphics.getByName(image_name)
+            doc_text = doc.getText()
+
+            # Find if the image sits inside a text frame by
+            # comparing anchor text with each frame's text using
+            # UNO object equality (==).
+            anchor_text = graphic.getAnchor().getText()
+            frame_name = None
+            parent_frame = None
+            if hasattr(doc, 'getTextFrames'):
+                frames_access = doc.getTextFrames()
+                for fname in frames_access.getElementNames():
+                    fr = frames_access.getByName(fname)
+                    if fr.getText() == anchor_text:
+                        frame_name = fname
+                        parent_frame = fr
+                        break
+
+            if frame_name is not None and remove_frame:
+                # Remove the whole frame (takes image + caption with it)
+                doc_text.removeTextContent(parent_frame)
+            elif frame_name is not None:
+                # Remove only the image, keep the frame
+                anchor_text.removeTextContent(graphic)
+            else:
+                # Standalone image — remove directly
+                doc_text.removeTextContent(graphic)
+
+            if doc.hasLocation():
+                self._store_doc(doc)
+
+            result = {"success": True, "deleted_image": image_name}
+            if frame_name and remove_frame:
+                result["deleted_frame"] = frame_name
+            elif frame_name:
+                result["kept_frame"] = frame_name
+            return result
+        except Exception as e:
+            logger.error(f"Failed to delete image: {e}")
+            return {"success": False, "error": str(e)}
+
+    def replace_image(self, image_name: str, new_image_path: str,
+                      width_mm: int = None, height_mm: int = None,
+                      file_path: str = None) -> Dict[str, Any]:
+        """Replace an image's graphic source, keeping its frame/position."""
+        try:
+            import os
+            if not os.path.isfile(new_image_path):
+                return {"success": False,
+                        "error": f"Image file not found: {new_image_path}"}
+
+            doc = self._resolve_document(file_path)
+            graphics = doc.getGraphicObjects()
+            if not graphics.hasByName(image_name):
+                return {"success": False,
+                        "error": f"Image '{image_name}' not found",
+                        "available": list(graphics.getElementNames())}
+
+            graphic = graphics.getByName(image_name)
+
+            # Convert path to file URL
+            image_url = "file://" + new_image_path
+            if not new_image_path.startswith("/"):
+                image_url = "file:///" + new_image_path
+
+            graphic.setPropertyValue("GraphicURL", image_url)
+
+            # Optionally resize
+            if width_mm is not None or height_mm is not None:
+                from com.sun.star.awt import Size as AwtSize
+                size = graphic.getPropertyValue("Size")
+                cur_w = size.Width
+                cur_h = size.Height
+                if width_mm is not None and height_mm is not None:
+                    size.Width = width_mm * 100
+                    size.Height = height_mm * 100
+                elif width_mm is not None:
+                    ratio = (width_mm * 100) / cur_w if cur_w else 1
+                    size.Width = width_mm * 100
+                    size.Height = int(cur_h * ratio)
+                else:
+                    ratio = (height_mm * 100) / cur_h if cur_h else 1
+                    size.Height = height_mm * 100
+                    size.Width = int(cur_w * ratio)
+                graphic.setPropertyValue("Size", size)
+
+            if doc.hasLocation():
+                self._store_doc(doc)
+
+            return {"success": True, "image_name": image_name,
+                    "new_source": new_image_path}
+        except Exception as e:
+            logger.error(f"Failed to replace image: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Text Frames
+    # ----------------------------------------------------------------
+
+    def list_text_frames(self, file_path: str = None) -> Dict[str, Any]:
+        """List all text frames in the document."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not hasattr(doc, 'getTextFrames'):
+                return {"success": False,
+                        "error": "Document does not support text frames"}
+
+            frames_access = doc.getTextFrames()
+
+            # Find which images belong to which frame using UNO ==
+            frame_images = {}  # frame_name -> [image_name, ...]
+            if hasattr(doc, 'getGraphicObjects'):
+                graphics = doc.getGraphicObjects()
+                for gname in graphics.getElementNames():
+                    graphic = graphics.getByName(gname)
+                    try:
+                        anchor_text = graphic.getAnchor().getText()
+                        for fname in frames_access.getElementNames():
+                            fr = frames_access.getByName(fname)
+                            if fr.getText() == anchor_text:
+                                frame_images.setdefault(
+                                    fname, []).append(gname)
+                                break
+                    except Exception:
+                        pass
+
+            result = []
+            for fname in frames_access.getElementNames():
+                frame = frames_access.getByName(fname)
+                entry = {"name": fname}
+                try:
+                    size = frame.getPropertyValue("Size")
+                    entry["width_mm"] = size.Width // 100
+                    entry["height_mm"] = size.Height // 100
+                except Exception:
+                    pass
+                try:
+                    val = frame.getPropertyValue("AnchorType")
+                    try:
+                        entry["anchor_type"] = val.value
+                    except AttributeError:
+                        entry["anchor_type"] = str(val)
+                except Exception:
+                    pass
+                for prop, key in (("HoriOrient", "hori_orient"),
+                                  ("VertOrient", "vert_orient")):
+                    try:
+                        entry[key] = int(frame.getPropertyValue(prop))
+                    except Exception:
+                        pass
+                try:
+                    anchor = frame.getAnchor()
+                    pidx = self._anchor_para_index(doc, anchor)
+                    if pidx is not None:
+                        entry["paragraph_index"] = pidx
+                    page = self._resolve_page(doc, fname, anchor)
+                    if page is not None:
+                        entry["page"] = page
+                except Exception:
+                    pass
+                if fname in frame_images:
+                    entry["images"] = frame_images[fname]
+                result.append(entry)
+
+            return {"success": True, "frames": result,
+                    "count": len(result)}
+        except Exception as e:
+            logger.error(f"Failed to list text frames: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_text_frame_info(self, frame_name: str,
+                            file_path: str = None) -> Dict[str, Any]:
+        """Get detailed info about a specific text frame."""
+        try:
+            doc = self._resolve_document(file_path)
+            frames_access = doc.getTextFrames()
+
+            if not frames_access.hasByName(frame_name):
+                return {"success": False,
+                        "error": f"Frame '{frame_name}' not found",
+                        "available": list(frames_access.getElementNames())}
+
+            frame = frames_access.getByName(frame_name)
+            info = {"name": frame_name, "success": True}
+
+            # Size
+            try:
+                size = frame.getPropertyValue("Size")
+                info["width_mm"] = size.Width // 100
+                info["height_mm"] = size.Height // 100
+            except Exception:
+                pass
+
+            # Anchor type
+            anchor_names = ["AT_PARAGRAPH", "AS_CHARACTER",
+                            "AT_PAGE", "AT_FRAME", "AT_CHARACTER"]
+            try:
+                val = frame.getPropertyValue("AnchorType")
+                try:
+                    str_val = val.value
+                except AttributeError:
+                    str_val = str(val)
+                info["anchor_type"] = str_val
+                if str_val in anchor_names:
+                    info["anchor_type_id"] = anchor_names.index(str_val)
+            except Exception:
+                pass
+
+            # Orientation
+            for prop in ("HoriOrient", "VertOrient"):
+                try:
+                    info[prop] = int(frame.getPropertyValue(prop))
+                except Exception:
+                    pass
+
+            # Position (used when orient=NONE)
+            for prop, key in (("HoriOrientPosition", "hori_pos_mm"),
+                              ("VertOrientPosition", "vert_pos_mm")):
+                try:
+                    info[key] = frame.getPropertyValue(prop) // 100
+                except Exception:
+                    pass
+
+            # Wrap / Surround
+            for prop in ("Surround", "TextWrapType"):
+                try:
+                    val = frame.getPropertyValue(prop)
+                    wrap_names = {0: "NONE", 1: "COLUMN", 2: "PARALLEL",
+                                  3: "DYNAMIC", 4: "THROUGH"}
+                    ival = int(val)
+                    info["wrap"] = wrap_names.get(ival, str(ival))
+                    info["wrap_id"] = ival
+                    break
+                except Exception:
+                    pass
+
+            # Paragraph index and page
+            try:
+                anchor = frame.getAnchor()
+                pidx = self._anchor_para_index(doc, anchor)
+                if pidx is not None:
+                    info["paragraph_index"] = pidx
+                page = self._resolve_page(doc, frame_name, anchor)
+                if page is not None:
+                    info["page"] = page
+            except Exception:
+                pass
+
+            # Contained text (caption)
+            try:
+                frame_text = frame.getText().getString()
+                if frame_text:
+                    info["text"] = frame_text
+            except Exception:
+                pass
+
+            # Contained images
+            if hasattr(doc, 'getGraphicObjects'):
+                imgs = []
+                graphics = doc.getGraphicObjects()
+                ft = frame.getText()
+                for gname in graphics.getElementNames():
+                    graphic = graphics.getByName(gname)
+                    try:
+                        if graphic.getAnchor().getText() == ft:
+                            imgs.append(gname)
+                    except Exception:
+                        pass
+                if imgs:
+                    info["images"] = imgs
+
+            return info
+        except Exception as e:
+            logger.error(f"Failed to get text frame info: {e}")
+            return {"success": False, "error": str(e)}
+
+    def set_text_frame_properties(self, frame_name: str,
+                                  width_mm: int = None,
+                                  height_mm: int = None,
+                                  anchor_type: int = None,
+                                  hori_orient: int = None,
+                                  vert_orient: int = None,
+                                  hori_pos_mm: int = None,
+                                  vert_pos_mm: int = None,
+                                  wrap: int = None,
+                                  paragraph_index: int = None,
+                                  file_path: str = None) -> Dict[str, Any]:
+        """Modify text frame properties.
+
+        Args:
+            frame_name: Name of the text frame
+            width_mm: New width in mm
+            height_mm: New height in mm
+            anchor_type: 0=AT_PARAGRAPH, 1=AS_CHARACTER, 2=AT_PAGE,
+                         3=AT_FRAME, 4=AT_CHARACTER
+            hori_orient: 0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT
+            vert_orient: 0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM
+            hori_pos_mm: Horizontal position in mm (when hori_orient=NONE)
+            vert_pos_mm: Vertical position in mm (when vert_orient=NONE)
+            wrap: 0=NONE, 1=COLUMN, 2=PARALLEL, 3=DYNAMIC, 4=THROUGH
+            paragraph_index: Move anchor to this paragraph index
+        """
+        try:
+            doc = self._resolve_document(file_path)
+            frames_access = doc.getTextFrames()
+
+            if not frames_access.hasByName(frame_name):
+                return {"success": False,
+                        "error": f"Frame '{frame_name}' not found",
+                        "available": list(frames_access.getElementNames())}
+
+            frame = frames_access.getByName(frame_name)
+            changed = []
+
+            # Resize
+            if width_mm is not None or height_mm is not None:
+                size = frame.getPropertyValue("Size")
+                if width_mm is not None:
+                    size.Width = width_mm * 100
+                if height_mm is not None:
+                    size.Height = height_mm * 100
+                frame.setPropertyValue("Size", size)
+                changed.append(
+                    f"size={size.Width // 100}x{size.Height // 100}mm")
+
+            if anchor_type is not None:
+                frame.setPropertyValue("AnchorType", anchor_type)
+                labels = {0: "AT_PARAGRAPH", 1: "AS_CHARACTER",
+                          2: "AT_PAGE", 3: "AT_FRAME", 4: "AT_CHARACTER"}
+                changed.append(
+                    f"anchor={labels.get(anchor_type, anchor_type)}")
+
+            if hori_orient is not None:
+                frame.setPropertyValue("HoriOrient", hori_orient)
+                changed.append(f"hori_orient={hori_orient}")
+
+            if vert_orient is not None:
+                frame.setPropertyValue("VertOrient", vert_orient)
+                changed.append(f"vert_orient={vert_orient}")
+
+            if hori_pos_mm is not None:
+                frame.setPropertyValue(
+                    "HoriOrientPosition", hori_pos_mm * 100)
+                changed.append(f"hori_pos={hori_pos_mm}mm")
+
+            if vert_pos_mm is not None:
+                frame.setPropertyValue(
+                    "VertOrientPosition", vert_pos_mm * 100)
+                changed.append(f"vert_pos={vert_pos_mm}mm")
+
+            if wrap is not None:
+                # Try Surround first (more common), fall back to TextWrapType
+                try:
+                    frame.setPropertyValue("Surround", wrap)
+                except Exception:
+                    frame.setPropertyValue("TextWrapType", wrap)
+                wrap_names = {0: "NONE", 1: "COLUMN", 2: "PARALLEL",
+                              3: "DYNAMIC", 4: "THROUGH"}
+                changed.append(
+                    f"wrap={wrap_names.get(wrap, wrap)}")
+
+            if paragraph_index is not None:
+                text = doc.getText()
+                cursor = text.createTextCursor()
+                cursor.gotoStart(False)
+                for _ in range(paragraph_index):
+                    if not cursor.gotoNextParagraph(False):
+                        break
+                frame.attach(cursor)
+                changed.append(f"paragraph_index={paragraph_index}")
+
+            if doc.hasLocation():
+                self._store_doc(doc)
+
+            return {"success": True, "frame": frame_name,
+                    "changes": changed}
+        except Exception as e:
+            logger.error(f"Failed to set text frame properties: {e}")
             return {"success": False, "error": str(e)}
 
     # ----------------------------------------------------------------
@@ -2374,6 +3122,20 @@ class UNOBridge:
             logger.error(f"Failed to get page count: {e}")
             return {"success": False, "error": str(e)}
 
+    def goto_page(self, page: int,
+                  file_path: str = None) -> Dict[str, Any]:
+        """Scroll the view to a specific page."""
+        try:
+            doc = self._resolve_document(file_path)
+            controller = doc.getCurrentController()
+            vc = controller.getViewCursor()
+            vc.jumpToPage(page)
+            actual = vc.getPage()
+            return {"success": True, "page": actual}
+        except Exception as e:
+            logger.error(f"Failed to goto page: {e}")
+            return {"success": False, "error": str(e)}
+
     # ----------------------------------------------------------------
     # Calc tools
     # ----------------------------------------------------------------
@@ -2470,7 +3232,7 @@ class UNOBridge:
                 cell_obj.setString(value)
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {
                 "success": True,
@@ -2689,7 +3451,7 @@ class UNOBridge:
                 refreshed.append(name)
 
             if count > 0 and doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True, "refreshed": refreshed,
                     "count": count}
@@ -2761,7 +3523,7 @@ class UNOBridge:
             cursor.setString("")
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True,
                     "message": f"Deleted paragraph {paragraph_index}"}
@@ -2803,7 +3565,7 @@ class UNOBridge:
             target.setString(text)
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True,
                     "paragraph_index": paragraph_index,
@@ -2894,7 +3656,7 @@ class UNOBridge:
                 updated.append("keywords")
 
             if updated and doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True, "updated_fields": updated}
         except Exception as e:
@@ -2935,7 +3697,7 @@ class UNOBridge:
             target.setPropertyValue("ParaStyleName", style_name)
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True,
                     "paragraph_index": paragraph_index,
@@ -3008,7 +3770,7 @@ class UNOBridge:
                     cursor.setPropertyValue("ParaStyleName", para["style"])
 
             if doc.hasLocation():
-                doc.store()
+                self._store_doc(doc)
 
             return {"success": True,
                     "duplicated_from": paragraph_index,
@@ -3190,7 +3952,7 @@ class UNOBridge:
             else:
                 # Save to current location
                 if doc.hasLocation():
-                    doc.store()
+                    self._store_doc(doc)
                     logger.info("Saved document to current location")
                     return {"success": True, "message": "Document saved"}
                 else:

@@ -496,6 +496,21 @@ class LibreOfficeMCPServer:
             "handler": self._h_get_page_count
         }
 
+        self.tools["goto_page"] = {
+            "description": "Scroll the view to a specific page",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer",
+                             "description": "Page number (1-based)"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["page"]
+            },
+            "handler": self._h_goto_page
+        }
+
         # -------------------------------------------------------
         # Calc tools
         # -------------------------------------------------------
@@ -1053,8 +1068,8 @@ class LibreOfficeMCPServer:
         }
 
         self.tools["set_image_properties"] = {
-            "description": "Resize, reposition, or update caption/alt-text "
-                           "for an image",
+            "description": "Resize, reposition, crop, or update "
+                           "caption/alt-text for an image",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1073,12 +1088,196 @@ class LibreOfficeMCPServer:
                         "description": "0=AT_PARAGRAPH, 1=AS_CHARACTER, "
                                        "2=AT_PAGE, 3=AT_FRAME, 4=AT_CHARACTER"
                     },
+                    "hori_orient": {
+                        "type": "integer",
+                        "description": "0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT"
+                    },
+                    "vert_orient": {
+                        "type": "integer",
+                        "description": "0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM"
+                    },
+                    "hori_orient_relation": {
+                        "type": "integer",
+                        "description": "0=PARAGRAPH, 1=FRAME, 2=PAGE..."
+                    },
+                    "vert_orient_relation": {
+                        "type": "integer",
+                        "description": "0=PARAGRAPH, 1=FRAME, 2=PAGE..."
+                    },
+                    "crop_top_mm": {"type": "integer",
+                                    "description": "Crop from top in mm"},
+                    "crop_bottom_mm": {"type": "integer",
+                                       "description": "Crop from bottom in mm"},
+                    "crop_left_mm": {"type": "integer",
+                                     "description": "Crop from left in mm"},
+                    "crop_right_mm": {"type": "integer",
+                                      "description": "Crop from right in mm"},
                     "file_path": {"type": "string",
                                   "description": "File path (optional)"}
                 },
                 "required": ["image_name"]
             },
             "handler": self._h_set_image_properties
+        }
+
+        self.tools["insert_image"] = {
+            "description": "Insert an image from a file path into the "
+                           "document, optionally inside a caption frame",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {"type": "string",
+                                   "description": "Absolute path to the "
+                                                  "image file"},
+                    "paragraph_index": {"type": "integer",
+                                        "description": "Paragraph to insert "
+                                                       "after (legacy)"},
+                    "locator": {"type": "string",
+                                "description": "Unified locator"},
+                    "caption": {"type": "string",
+                                "description": "Caption text (optional)"},
+                    "with_frame": {"type": "boolean",
+                                   "description": "Wrap in a text frame "
+                                                  "(default: true)"},
+                    "width_mm": {"type": "integer",
+                                 "description": "Width in mm (default: 80)"},
+                    "height_mm": {"type": "integer",
+                                  "description": "Height in mm (default: 80)"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["image_path"]
+            },
+            "handler": self._h_insert_image
+        }
+
+        self.tools["delete_image"] = {
+            "description": "Delete an image. By default also removes its "
+                           "parent frame. Set remove_frame=false to keep "
+                           "the frame (e.g. before inserting a replacement).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_name": {"type": "string",
+                                   "description": "Name of the image to "
+                                                  "delete"},
+                    "remove_frame": {"type": "boolean",
+                                     "description": "Also remove parent "
+                                                    "frame (default: true)"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["image_name"]
+            },
+            "handler": self._h_delete_image
+        }
+
+        self.tools["replace_image"] = {
+            "description": "Replace an image's source file, keeping its "
+                           "frame, position, and caption intact",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_name": {"type": "string",
+                                   "description": "Name of the image to "
+                                                  "replace"},
+                    "new_image_path": {"type": "string",
+                                       "description": "Path to the new "
+                                                      "image file"},
+                    "width_mm": {"type": "integer",
+                                 "description": "New width in mm (optional)"},
+                    "height_mm": {"type": "integer",
+                                  "description": "New height in mm "
+                                                 "(optional)"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["image_name", "new_image_path"]
+            },
+            "handler": self._h_replace_image
+        }
+
+        # -------------------------------------------------------
+        # Text Frames
+        # -------------------------------------------------------
+
+        self.tools["list_text_frames"] = {
+            "description": "List all text frames in the document",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_list_text_frames
+        }
+
+        self.tools["get_text_frame_info"] = {
+            "description": "Get detailed info about a specific text frame",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "frame_name": {"type": "string",
+                                   "description": "Name of the text frame"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["frame_name"]
+            },
+            "handler": self._h_get_text_frame_info
+        }
+
+        self.tools["set_text_frame_properties"] = {
+            "description": "Modify text frame properties (size, position, "
+                           "wrap, anchor)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "frame_name": {"type": "string",
+                                   "description": "Name of the text frame"},
+                    "width_mm": {"type": "integer",
+                                 "description": "New width in mm"},
+                    "height_mm": {"type": "integer",
+                                  "description": "New height in mm"},
+                    "anchor_type": {
+                        "type": "integer",
+                        "description": "0=AT_PARAGRAPH, 1=AS_CHARACTER, "
+                                       "2=AT_PAGE, 3=AT_FRAME, 4=AT_CHARACTER"
+                    },
+                    "hori_orient": {
+                        "type": "integer",
+                        "description": "0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT"
+                    },
+                    "vert_orient": {
+                        "type": "integer",
+                        "description": "0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM"
+                    },
+                    "hori_pos_mm": {
+                        "type": "integer",
+                        "description": "Horizontal position in mm "
+                                       "(when hori_orient=NONE)"
+                    },
+                    "vert_pos_mm": {
+                        "type": "integer",
+                        "description": "Vertical position in mm "
+                                       "(when vert_orient=NONE)"
+                    },
+                    "wrap": {
+                        "type": "integer",
+                        "description": "0=NONE, 1=COLUMN, 2=PARALLEL, "
+                                       "3=DYNAMIC, 4=THROUGH"
+                    },
+                    "paragraph_index": {
+                        "type": "integer",
+                        "description": "Move anchor to this paragraph index"
+                    },
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["frame_name"]
+            },
+            "handler": self._h_set_text_frame_properties
         }
 
         # -------------------------------------------------------
@@ -1288,6 +1487,10 @@ class LibreOfficeMCPServer:
     def _h_get_page_count(self, file_path: str = None) -> Dict[str, Any]:
         return self.uno_bridge.get_page_count(file_path)
 
+    def _h_goto_page(self, page: int,
+                      file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.goto_page(page, file_path)
+
     # -- Calc handlers --
 
     def _h_read_cells(self, range_str: str,
@@ -1466,10 +1669,72 @@ class LibreOfficeMCPServer:
                                  title: str = None,
                                  description: str = None,
                                  anchor_type: int = None,
+                                 hori_orient: int = None,
+                                 vert_orient: int = None,
+                                 hori_orient_relation: int = None,
+                                 vert_orient_relation: int = None,
+                                 crop_top_mm: int = None,
+                                 crop_bottom_mm: int = None,
+                                 crop_left_mm: int = None,
+                                 crop_right_mm: int = None,
                                  file_path: str = None) -> Dict[str, Any]:
         return self.uno_bridge.set_image_properties(
             image_name, width_mm, height_mm, title, description,
-            anchor_type, file_path)
+            anchor_type, hori_orient, vert_orient,
+            hori_orient_relation, vert_orient_relation,
+            crop_top_mm, crop_bottom_mm, crop_left_mm, crop_right_mm,
+            file_path)
+
+    def _h_insert_image(self, image_path: str,
+                         paragraph_index: int = None,
+                         locator: str = None,
+                         caption: str = None,
+                         with_frame: bool = True,
+                         width_mm: int = None,
+                         height_mm: int = None,
+                         file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.insert_image(
+            image_path, paragraph_index, locator, caption,
+            with_frame, width_mm, height_mm, file_path)
+
+    def _h_delete_image(self, image_name: str,
+                         remove_frame: bool = True,
+                         file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.delete_image(
+            image_name, remove_frame, file_path)
+
+    def _h_replace_image(self, image_name: str,
+                          new_image_path: str,
+                          width_mm: int = None,
+                          height_mm: int = None,
+                          file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.replace_image(
+            image_name, new_image_path, width_mm, height_mm, file_path)
+
+    # -- Text Frames handlers --
+
+    def _h_list_text_frames(self, file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.list_text_frames(file_path)
+
+    def _h_get_text_frame_info(self, frame_name: str,
+                                file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_text_frame_info(frame_name, file_path)
+
+    def _h_set_text_frame_properties(self, frame_name: str,
+                                      width_mm: int = None,
+                                      height_mm: int = None,
+                                      anchor_type: int = None,
+                                      hori_orient: int = None,
+                                      vert_orient: int = None,
+                                      hori_pos_mm: int = None,
+                                      vert_pos_mm: int = None,
+                                      wrap: int = None,
+                                      paragraph_index: int = None,
+                                      file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.set_text_frame_properties(
+            frame_name, width_mm, height_mm, anchor_type, hori_orient,
+            vert_orient, hori_pos_mm, vert_pos_mm, wrap, paragraph_index,
+            file_path)
 
     # -- Recent Documents handler --
 

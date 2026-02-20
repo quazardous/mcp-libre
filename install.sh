@@ -380,7 +380,7 @@ verify_setup() {
     fi
 
     write_step "Testing MCP server import..."
-    if (cd "$PROJECT_ROOT" && uv run python -c "from src.libremcp import mcp; print('MCP server OK')" 2>&1 | grep -q "MCP server OK"); then
+    if (cd "$PROJECT_ROOT" && uv run python -c "from src.server import mcp; print('MCP server OK')" 2>&1 | grep -q "MCP server OK"); then
         write_ok "MCP server module loads correctly"
     else
         write_warn "MCP server import issue"

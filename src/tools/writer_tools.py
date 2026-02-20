@@ -271,6 +271,19 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
         return call_plugin("get_page_count", _p({}, path))
 
     @mcp.tool()
+    def goto_page(page: int,
+                  path: Optional[str] = None) -> Dict[str, Any]:
+        """Scroll the LibreOffice view to a specific page.
+
+        Use this to visually navigate to a page so the user can see it.
+
+        Args:
+            page: Page number (1-based)
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        return call_plugin("goto_page", _p({"page": page}, path))
+
+    @mcp.tool()
     def get_page_objects(page: Optional[int] = None,
                          locator: Optional[str] = None,
                          paragraph_index: Optional[int] = None,
@@ -769,9 +782,17 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
                                       title: Optional[str] = None,
                                       description: Optional[str] = None,
                                       anchor_type: Optional[int] = None,
+                                      hori_orient: Optional[int] = None,
+                                      vert_orient: Optional[int] = None,
+                                      hori_orient_relation: Optional[int] = None,
+                                      vert_orient_relation: Optional[int] = None,
+                                      crop_top_mm: Optional[int] = None,
+                                      crop_bottom_mm: Optional[int] = None,
+                                      crop_left_mm: Optional[int] = None,
+                                      crop_right_mm: Optional[int] = None,
                                       path: Optional[str] = None
                                       ) -> Dict[str, Any]:
-        """Resize, reposition, or update caption/alt-text for an image.
+        """Resize, reposition, crop, or update caption/alt-text for an image.
 
         Provide width_mm alone to resize keeping aspect ratio.
         Provide both width_mm and height_mm to set exact dimensions.
@@ -782,6 +803,15 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
           2 = AT_PAGE (fixed position on page)
           4 = AT_CHARACTER (anchored to a character position)
 
+        Orientation:
+          HoriOrient: 0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT
+          VertOrient: 0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM
+
+        Orient relation (what the orient is relative to):
+          0=PARAGRAPH, 1=FRAME, 2=PAGE...
+
+        Crop: values in mm, trims the image without resizing.
+
         Args:
             image_name: Name of the image (use list_document_images to find)
             width_mm: New width in millimeters
@@ -789,6 +819,14 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
             title: Image title / caption text
             description: Alt-text for accessibility
             anchor_type: Anchor type (0, 1, 2, or 4)
+            hori_orient: Horizontal orientation
+            vert_orient: Vertical orientation
+            hori_orient_relation: Horizontal orient relative to (0=PARAGRAPH, 1=FRAME)
+            vert_orient_relation: Vertical orient relative to (0=PARAGRAPH, 1=FRAME)
+            crop_top_mm: Crop from top in mm
+            crop_bottom_mm: Crop from bottom in mm
+            crop_left_mm: Crop from left in mm
+            crop_right_mm: Crop from right in mm
             path: Absolute path to the document (optional, uses active doc)
         """
         params: Dict[str, Any] = {"image_name": image_name}
@@ -802,7 +840,205 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
             params["description"] = description
         if anchor_type is not None:
             params["anchor_type"] = anchor_type
+        if hori_orient is not None:
+            params["hori_orient"] = hori_orient
+        if vert_orient is not None:
+            params["vert_orient"] = vert_orient
+        if hori_orient_relation is not None:
+            params["hori_orient_relation"] = hori_orient_relation
+        if vert_orient_relation is not None:
+            params["vert_orient_relation"] = vert_orient_relation
+        if crop_top_mm is not None:
+            params["crop_top_mm"] = crop_top_mm
+        if crop_bottom_mm is not None:
+            params["crop_bottom_mm"] = crop_bottom_mm
+        if crop_left_mm is not None:
+            params["crop_left_mm"] = crop_left_mm
+        if crop_right_mm is not None:
+            params["crop_right_mm"] = crop_right_mm
         return call_plugin("set_image_properties", _p(params, path))
+
+    @mcp.tool()
+    def insert_document_image(image_path: str,
+                              path: Optional[str] = None,
+                              locator: Optional[str] = None,
+                              paragraph_index: Optional[int] = None,
+                              caption: Optional[str] = None,
+                              with_frame: bool = True,
+                              width_mm: Optional[int] = None,
+                              height_mm: Optional[int] = None
+                              ) -> Dict[str, Any]:
+        """Insert an image from a file path into the document.
+
+        By default the image is wrapped in a text frame (caption frame).
+        Set with_frame=False to insert a standalone image.
+        If caption is provided, it is added as text below the image
+        inside the frame.
+
+        Args:
+            image_path: Absolute path to the image file on disk
+            path: Absolute path to the document (optional, uses active doc)
+            locator: Unified locator for insertion point (e.g. 'paragraph:5')
+            paragraph_index: Paragraph index to insert after (legacy)
+            caption: Caption text below the image (optional)
+            with_frame: Wrap in a text frame (default: True)
+            width_mm: Width in mm (default: 80)
+            height_mm: Height in mm (default: 80)
+        """
+        params: Dict[str, Any] = {
+            "image_path": image_path, "with_frame": with_frame}
+        if locator is not None:
+            params["locator"] = locator
+        if paragraph_index is not None:
+            params["paragraph_index"] = paragraph_index
+        if caption is not None:
+            params["caption"] = caption
+        if width_mm is not None:
+            params["width_mm"] = width_mm
+        if height_mm is not None:
+            params["height_mm"] = height_mm
+        return call_plugin("insert_image", _p(params, path))
+
+    @mcp.tool()
+    def delete_document_image(image_name: str,
+                              remove_frame: bool = True,
+                              path: Optional[str] = None
+                              ) -> Dict[str, Any]:
+        """Delete an image from the document.
+
+        If the image is inside a text frame and remove_frame=True (default),
+        the entire frame (image + caption) is removed.
+        Set remove_frame=False to remove only the image while keeping
+        the frame and its caption intact.
+
+        Args:
+            image_name: Name of the image (use list_document_images to find)
+            remove_frame: Also remove parent frame (default: True)
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        return call_plugin("delete_image", _p({
+            "image_name": image_name,
+            "remove_frame": remove_frame}, path))
+
+    @mcp.tool()
+    def replace_document_image(image_name: str,
+                               new_image_path: str,
+                               width_mm: Optional[int] = None,
+                               height_mm: Optional[int] = None,
+                               path: Optional[str] = None
+                               ) -> Dict[str, Any]:
+        """Replace an image's source file, keeping its frame and position.
+
+        The image stays in its current frame with the same anchor,
+        orientation, and caption. Only the graphic source changes.
+        Optionally resize after replacement.
+
+        Args:
+            image_name: Name of the image to replace
+            new_image_path: Absolute path to the new image file on disk
+            width_mm: New width in mm (optional, keeps current if omitted)
+            height_mm: New height in mm (optional, keeps current if omitted)
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        params: Dict[str, Any] = {
+            "image_name": image_name,
+            "new_image_path": new_image_path}
+        if width_mm is not None:
+            params["width_mm"] = width_mm
+        if height_mm is not None:
+            params["height_mm"] = height_mm
+        return call_plugin("replace_image", _p(params, path))
+
+    # ---------------------------------------------------------------
+    # Text Frames
+    # ---------------------------------------------------------------
+
+    @mcp.tool()
+    def list_document_frames(path: Optional[str] = None
+                             ) -> Dict[str, Any]:
+        """List all text frames in the document.
+
+        Returns name, dimensions, anchor type, orientation, paragraph_index,
+        and contained images for each frame.
+
+        Args:
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        return call_plugin("list_text_frames", _p({}, path))
+
+    @mcp.tool()
+    def get_document_frame_info(frame_name: str,
+                                path: Optional[str] = None
+                                ) -> Dict[str, Any]:
+        """Get detailed info about a specific text frame.
+
+        Returns size, position, anchor type, orientation, wrap mode,
+        paragraph_index, contained text (caption), and contained images.
+
+        Args:
+            frame_name: Name of the text frame (use list_document_frames)
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        return call_plugin("get_text_frame_info", _p({
+            "frame_name": frame_name}, path))
+
+    @mcp.tool()
+    def set_document_frame_properties(frame_name: str,
+                                      width_mm: Optional[int] = None,
+                                      height_mm: Optional[int] = None,
+                                      anchor_type: Optional[int] = None,
+                                      hori_orient: Optional[int] = None,
+                                      vert_orient: Optional[int] = None,
+                                      hori_pos_mm: Optional[int] = None,
+                                      vert_pos_mm: Optional[int] = None,
+                                      wrap: Optional[int] = None,
+                                      paragraph_index: Optional[int] = None,
+                                      path: Optional[str] = None
+                                      ) -> Dict[str, Any]:
+        """Modify text frame properties (size, position, wrap, anchor).
+
+        Orientation values:
+          HoriOrient: 0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT
+          VertOrient: 0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM
+
+        Wrap values: 0=NONE, 1=COLUMN, 2=PARALLEL, 3=DYNAMIC, 4=THROUGH
+
+        Anchor types:
+          0 = AT_PARAGRAPH, 1 = AS_CHARACTER, 2 = AT_PAGE, 4 = AT_CHARACTER
+
+        Args:
+            frame_name: Name of the frame (use list_document_frames to find)
+            width_mm: New width in millimeters
+            height_mm: New height in millimeters
+            anchor_type: Anchor type (0, 1, 2, or 4)
+            hori_orient: Horizontal orientation
+            vert_orient: Vertical orientation
+            hori_pos_mm: Horizontal position in mm (when hori_orient=NONE)
+            vert_pos_mm: Vertical position in mm (when vert_orient=NONE)
+            wrap: Text wrap mode
+            paragraph_index: Move anchor to this paragraph index
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        params: Dict[str, Any] = {"frame_name": frame_name}
+        if width_mm is not None:
+            params["width_mm"] = width_mm
+        if height_mm is not None:
+            params["height_mm"] = height_mm
+        if anchor_type is not None:
+            params["anchor_type"] = anchor_type
+        if hori_orient is not None:
+            params["hori_orient"] = hori_orient
+        if vert_orient is not None:
+            params["vert_orient"] = vert_orient
+        if hori_pos_mm is not None:
+            params["hori_pos_mm"] = hori_pos_mm
+        if vert_pos_mm is not None:
+            params["vert_pos_mm"] = vert_pos_mm
+        if wrap is not None:
+            params["wrap"] = wrap
+        if paragraph_index is not None:
+            params["paragraph_index"] = paragraph_index
+        return call_plugin("set_text_frame_properties", _p(params, path))
 
     # ---------------------------------------------------------------
     # Recent Documents

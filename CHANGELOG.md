@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.0] - 2026-02-20
+
+### Added
+- `insert_image` tool — insert image with optional caption frame, anchor at paragraph
+- `delete_image` tool — remove image and parent frame; `remove_frame=false` keeps frame (for replacement)
+- `replace_image` tool — swap image source in-place, keeps frame/position/caption; optional proportional resize
+- `goto_page` tool — scroll LibreOffice view to a given page number
+- `get_page_objects` now returns **frames** with image mapping (frame → contained images)
+- `AGENT.md`: Page Object Indexing Strategy, Text Frames workflow, image tools reference
+
+### Changed
+- Renamed project "LibreOffice MCP Server" → "LibreOffice MCP"
+
+### Fixed
+- UNO proxy identity: replaced Python `id()` with UNO `==` operator in `delete_image`, `list_text_frames`, `get_page_objects` — fixes frame-image detection
+
 ## [1.3.1] - 2026-02-20
 
 ### Added

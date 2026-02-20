@@ -96,6 +96,7 @@ Always prefer bookmarks when available.
 | `get_paragraph_count` | Total paragraph count |
 | `search_in_document` | Native search with context |
 | `get_page_count` | Page count |
+| `get_page_objects` | All images, tables, and frames on a page (the page index) |
 | `list_sections` | Named text sections |
 | `read_section` | Content of a named section |
 | `list_bookmarks` | All bookmarks |
@@ -189,13 +190,79 @@ Use `list_styles(family="ParagraphStyles")` to discover existing styles before a
 
 | Tool | What it does |
 |---|---|
-| `list_images` | List all images (name, dimensions, title) |
-| `get_image_info` | Detailed info (URL, anchor, position) |
-| `set_image_properties` | Resize, reanchor, set title/alt-text |
+| `list_images` | List all images (name, dimensions, title, page) |
+| `get_image_info` | Detailed info (URL, anchor, position, crop) |
+| `set_image_properties` | Resize, reanchor, orient, crop, set title/alt-text |
+| `insert_image` | Insert an image from a file path (with or without caption frame) |
+| `delete_image` | Delete an image (and optionally its parent frame) |
+| `replace_image` | Swap the image source file, keeping frame/position/caption |
+
+Insert with frame (default): `insert_image(image_path="/path/to/photo.jpg", locator="paragraph:5", caption="Photo de famille")`.
+Insert standalone: `insert_image(image_path="/path/to/photo.jpg", locator="paragraph:5", with_frame=false)`.
+Replace source (keeps frame + caption): `replace_image(image_name="Image1", new_image_path="/path/to/new.jpg")`.
+Delete (removes frame + caption if framed): `delete_image(image_name="Image1")`.
+Delete image only (keep frame for replacement): `delete_image(image_name="Image1", remove_frame=false)`.
 
 Resize keeping aspect ratio: `set_image_properties(image_name="Image1", width_mm=80)`.
 Set caption: `set_image_properties(image_name="Image1", title="Photo de famille")`.
 Anchor types: 0=AT_PARAGRAPH, 1=AS_CHARACTER (inline), 2=AT_PAGE, 4=AT_CHARACTER.
+Orient: hori_orient (0=NONE, 1=RIGHT, 2=CENTER, 3=LEFT), vert_orient (0=NONE, 1=TOP, 2=CENTER, 3=BOTTOM).
+Crop: `crop_top_mm`, `crop_bottom_mm`, `crop_left_mm`, `crop_right_mm` — trims the visible area without distortion.
+
+### Text Frames
+
+| Tool | What it does |
+|---|---|
+| `list_frames` | List all text frames (name, size, anchor, page, contained images) |
+| `get_frame_info` | Detailed info (size, position, wrap, caption text, images) |
+| `set_frame_properties` | Resize, reposition, change wrap/anchor, move to paragraph |
+
+Frames are containers that hold images + caption text. To control image layout (e.g. align 3 images in a row), manipulate the frames, not the images directly.
+
+#### Strategy: Images with captions in frames
+
+Images in Writer are often placed inside text frames alongside a caption. Key principles:
+
+1. **Control layout via the frame**, not the image. Frame properties (size, position, wrap, anchor paragraph) determine where the content appears on the page.
+2. **All frames in a row must share the same anchor paragraph.** If one frame is anchored to a different paragraph, `vert_pos_mm` values are relative to different baselines and won't align visually. Use `set_frame_properties(paragraph_index=N)` to move an anchor.
+3. **Set images to CENTER/TOP** inside their frame (`hori_orient=2, vert_orient=1`). The image fills the top of the frame; the caption sits below.
+4. **Set `hori_orient_relation=0` and `vert_orient_relation=0`** (PARAGRAPH) on all images in a group. If one image has relation=1 (FRAME) while others have 0, they will be visually offset even with identical orient values.
+5. **Match image width to frame width** to avoid gaps. Calculate height proportionally to avoid distortion: `new_height = frame_width * original_height / original_width`.
+6. **Use crop to equalize visual height** when images have different aspect ratios. Crop the taller one (`crop_bottom_mm`) to match the shorter one's height. **Important:** crop only trims the source — you must also set `height_mm` to the target display height, otherwise the image box stays at the original size.
+7. **Frame height = image visible height + caption space** (~15mm for one-line caption, more for longer text).
+8. **"50/50" layout** means each frame gets half the usable page width. Check actual margins and page size first. Example for A4 with ~170mm usable: `frame_width = (usable_width - (N-1) * gap) / N`. Positions: `hori_pos = i * (frame_width + gap)`.
+
+#### Alignment checklist
+
+```
+# 1. Identify frames and images on the target page
+list_frames → filter by page number
+get_frame_info for each → note paragraph_index, positions, images
+
+# 2. Move all frames to the same anchor paragraph
+set_frame_properties(paragraph_index=N) for any mismatched frame
+
+# 3. Resize frames to equal width, calculate positions
+frame_width = (170 - (N-1) * 6) / N
+set_frame_properties(width_mm=W, height_mm=H, hori_pos_mm=..., vert_pos_mm=0)
+
+# 4. For each image in a frame:
+#    a. Set orient and relation
+set_image_properties(hori_orient=2, vert_orient=1,
+                     hori_orient_relation=0, vert_orient_relation=0)
+#    b. Resize to frame width, proportional height
+new_h = frame_width * orig_h / orig_w
+set_image_properties(width_mm=frame_width, height_mm=new_h)
+#    c. Find the shortest image height → that's the target
+target_h = min(all new_h values)
+#    d. Crop taller images AND set display height
+excess = new_h - target_h
+set_image_properties(height_mm=target_h, crop_bottom_mm=excess)
+```
+
+#### Page cache
+
+Page numbers are cached lazily. The first call resolves via ViewCursor and caches. Any `doc.store()` (triggered by any write operation) invalidates the cache for that document.
 
 ### Recent Documents
 
@@ -270,6 +337,75 @@ set_document_properties(title="IEF 2026-2027", subject="Instruction en famille")
 # 14. Save and unlock
 save_document()
 set_document_protection(enabled=false)  # human can edit again
+```
+
+## Page Object Indexing Strategy
+
+Working with images, frames, and tables requires knowing their names, positions, and relationships. Rather than calling `list_images`, `list_frames`, and `list_tables` separately (each returns **all** objects in the document), use `get_page_objects` to build a focused index of a single page.
+
+### `get_page_objects` — the page index tool
+
+One call returns all images, tables, and frames on a page:
+
+```
+get_page_objects(page=3)
+# → { images: [...], tables: [...], frames: [...] }
+```
+
+Each entry includes name, dimensions, paragraph_index, and (for frames) contained images. This is enough to plan layout changes without calling `get_image_info` or `get_frame_info` for every object.
+
+You can also resolve from a locator or paragraph index:
+
+```
+get_page_objects(locator="paragraph:89")    # finds which page para 89 is on
+get_page_objects(paragraph_index=89)        # same thing
+```
+
+### Recommended workflow for image/layout tasks
+
+```
+# 1. Identify the target page
+get_page_objects(page=5)
+# → images: [{name: "Image1", width_mm: 80, ...}, {name: "Image2", ...}]
+#   frames: [{name: "Frame1", images: ["Image1"], ...}, ...]
+#   tables: [...]
+
+# 2. Cache this result locally — it's your index for the page
+# Now you know all names, sizes, and which images belong to which frames
+
+# 3. Work from the index: resize, reposition, crop, insert, delete
+set_frame_properties(frame_name="Frame1", width_mm=82, hori_pos_mm=0)
+set_image_properties(image_name="Image1", width_mm=82, height_mm=60)
+
+# 4. After structural changes (insert/delete), re-index the page
+#    because names and paragraph indices may have changed
+get_page_objects(page=5)
+```
+
+### When to re-index
+
+Re-index a page (call `get_page_objects` again) after:
+- Inserting or deleting an image (`insert_image`, `delete_image`)
+- Creating or deleting a table (`create_table`)
+- Deleting or duplicating paragraphs that anchor objects
+- Any operation that changes paragraph indices (inserts, deletes)
+
+You do NOT need to re-index after:
+- Resizing images or frames (`set_image_properties`, `set_frame_properties`)
+- Changing anchor/orient/crop on existing objects
+- Editing text within paragraphs (`set_paragraph_text`, `replace_in_document`)
+
+### Anti-pattern: calling list_images + list_frames on large documents
+
+On a 50-page document with 30 images and 20 frames, `list_images` returns all 30 and `list_frames` returns all 20 — most of which you don't need. Instead:
+
+```
+# Bad: loads everything
+list_images → 30 entries, most irrelevant
+list_frames → 20 entries, most irrelevant
+
+# Good: loads only what's on page 5
+get_page_objects(page=5) → 3 images, 2 frames, 1 table
 ```
 
 ## Performance Notes

@@ -97,8 +97,10 @@ def register(mcp, backend: DocumentBackend,
                          search_path: Optional[str] = None) -> List[Dict[str, Any]]:
         """Search for documents containing specific text.
 
-        By default searches only documents already open in LibreOffice (fast, no side effects).
-        Pass search_path to scan a directory on disk instead (slower, opens files).
+        By default searches only documents already open in LibreOffice (fast,
+        no side effects).  Pass ``search_path`` to also scan a directory on
+        disk — already-open docs are searched via LibreOffice, other files
+        are searched with a plain-text read (no GUI windows are opened).
 
         Args:
             query: Text to search for
@@ -135,14 +137,16 @@ def register(mcp, backend: DocumentBackend,
                 pass
             return results
 
-        # Explicit path: scan filesystem, open/close docs one at a time
+        # Explicit path: scan filesystem without opening docs in the GUI.
+        # Already-open docs are searched via the LO plugin; other files are
+        # searched with a simple text-based read (no GUI side-effects).
         search_dir = Path(search_path)
         if not search_dir.exists():
             return results
 
         extensions = {'.odt', '.ods', '.odp', '.odg', '.doc', '.docx', '.txt'}
 
-        # Get URLs of already-open docs to avoid closing them
+        # Build a set of file URLs that are already open in LO.
         open_urls: set = set()
         try:
             open_docs = call_plugin("list_open_documents", {})
@@ -156,36 +160,45 @@ def register(mcp, backend: DocumentBackend,
                 if not doc_path.is_file():
                     continue
                 file_url = doc_path.resolve().as_uri()
-                was_open = file_url in open_urls
-                try:
-                    if not was_open:
-                        call_plugin("open_document", {
-                            "file_path": str(doc_path)})
-                    matches = call_plugin("search_in_document", {
-                        "pattern": query,
-                        "file_path": str(doc_path),
-                        "max_results": 5,
-                        "context_paragraphs": 1,
-                    })
-                    if matches.get("matches"):
-                        previews = [m.get("match_text", "")
-                                    for m in matches["matches"][:3]]
+
+                if file_url in open_urls:
+                    # Document is already open — search via the LO plugin.
+                    try:
+                        matches = call_plugin("search_in_document", {
+                            "pattern": query,
+                            "file_path": str(doc_path),
+                            "max_results": 5,
+                            "context_paragraphs": 1,
+                        })
+                        if matches.get("matches"):
+                            previews = [m.get("match_text", "")
+                                        for m in matches["matches"][:3]]
+                            results.append({
+                                "path": str(doc_path),
+                                "filename": doc_path.name,
+                                "format": doc_path.suffix.lower(),
+                                "match_count": matches.get("total_matches", 0),
+                                "matches": previews,
+                            })
+                    except Exception:
+                        pass
+                else:
+                    # Document is NOT open — use a plain-text grep so we
+                    # never pop up a window.  Only works for .txt files;
+                    # binary office formats are silently skipped.
+                    try:
+                        text = doc_path.read_text(errors="ignore")
+                    except Exception:
+                        continue
+                    if query.lower() in text.lower():
+                        ctx = _get_match_context(text, query)
                         results.append({
                             "path": str(doc_path),
                             "filename": doc_path.name,
                             "format": doc_path.suffix.lower(),
-                            "match_count": matches.get("total_matches", 0),
-                            "matches": previews,
+                            "match_count": text.lower().count(query.lower()),
+                            "matches": [ctx] if ctx else [],
                         })
-                except Exception:
-                    pass
-                finally:
-                    if not was_open:
-                        try:
-                            call_plugin("close_document", {
-                                "file_path": str(doc_path)})
-                        except Exception:
-                            pass
         return results
 
     @mcp.tool()
