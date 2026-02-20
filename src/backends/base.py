@@ -36,7 +36,8 @@ class DocumentBackend(ABC):
         """Insert text into a Writer document."""
 
     @abstractmethod
-    def open_document(self, path: str, readonly: bool) -> Dict[str, Any]:
+    def open_document(self, path: str, readonly: bool,
+                      force: bool = False) -> Dict[str, Any]:
         """Open a document for live viewing."""
 
     @abstractmethod

@@ -150,20 +150,26 @@ class GuiBackend(DocumentBackend):
         return get_document_info(str(path_obj))
 
     # -- open_document ------------------------------------------------------
-    def open_document(self, path: str, readonly: bool) -> Dict[str, Any]:
+    def open_document(self, path: str, readonly: bool,
+                      force: bool = False) -> Dict[str, Any]:
         path_obj = Path(path)
         if not path_obj.exists():
             raise FileNotFoundError(f"Document not found: {path}")
 
         result = self._call("open_document",
-                             {"file_path": str(path_obj.absolute())})
-        return {
+                             {"file_path": str(path_obj.absolute()),
+                              "force": force})
+        resp = {
             "success": result.get("success", True),
+            "already_open": result.get("already_open", False),
             "message": f"Opened {path_obj.name} in LibreOffice",
             "path": str(path_obj.absolute()),
             "readonly": readonly,
             "note": "Document opened in running LibreOffice instance.",
         }
+        if result.get("warning"):
+            resp["warning"] = result["warning"]
+        return resp
 
     # -- refresh_document ---------------------------------------------------
     def refresh_document(self, path: str) -> Dict[str, Any]:

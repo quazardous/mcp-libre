@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.3.1] - 2026-02-20
+
+### Added
+- **Page proximity**: `get_page_objects(locator=...|paragraph_index=...)` — find images/tables near a paragraph by page
+- `get_document_tree` now includes page numbers per heading and `page_count`
+- `close_document` tool across all layers (UNO bridge, HTTP, MCP)
+- `search_documents` now searches only open documents by default (fast, no side effects); pass `search_path` to scan disk
+
+### Changed
+- `open_document` duplicate detection: exact URL match reuses document; same filename at different path shows warning instead of blocking
+- `open_document` accepts `force` parameter to always open in new frame
+
+### Fixed
+- Normalized URL comparison in `_find_open_document` (lowercase, URL-decoded) prevents false negatives on Windows
+
 ## [1.3.0] - 2026-02-20
 
 ### Added

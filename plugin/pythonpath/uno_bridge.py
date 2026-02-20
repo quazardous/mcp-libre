@@ -44,6 +44,111 @@ class UNOBridge:
         except Exception as e:
             logger.error(f"Failed to initialize UNO Bridge: {e}")
             raise
+
+    # ----------------------------------------------------------------
+    # Page index — maps paragraphs/images/tables to page numbers
+    # ----------------------------------------------------------------
+
+    def _annotate_pages(self, nodes, doc):
+        """Add 'page' to each heading node using ViewCursor. Recursive."""
+        controller = doc.getCurrentController()
+        vc = controller.getViewCursor()
+        text = doc.getText()
+        for node in nodes:
+            try:
+                pi = node.get("para_index")
+                if pi is not None:
+                    node["page"] = self._get_page_for_paragraph(doc, pi)
+            except Exception:
+                pass
+            if "children" in node:
+                self._annotate_pages(node["children"], doc)
+
+    def _get_page_for_range(self, doc, text_range) -> int:
+        """Get the page number for a text range using ViewCursor."""
+        controller = doc.getCurrentController()
+        vc = controller.getViewCursor()
+        vc.gotoRange(text_range, False)
+        return vc.getPage()
+
+    def _get_page_for_paragraph(self, doc, para_index: int) -> int:
+        """Get the page number for a paragraph index."""
+        text = doc.getText()
+        cursor = text.createTextCursor()
+        cursor.gotoStart(False)
+        for _ in range(para_index):
+            if not cursor.gotoNextParagraph(False):
+                break
+        return self._get_page_for_range(doc, cursor)
+
+    def get_page_objects(self, page: int = None,
+                         locator: str = None,
+                         paragraph_index: int = None,
+                         file_path: str = None) -> Dict[str, Any]:
+        """Get all objects on a page. Accepts page number or locator to resolve."""
+        doc = self._resolve_document(file_path)
+        controller = doc.getCurrentController()
+        vc = controller.getViewCursor()
+
+        # Resolve page from locator or paragraph_index
+        if page is None:
+            if locator:
+                resolved = self._resolve_locator(doc, locator)
+                para_idx = resolved.get("para_index", 0)
+            elif paragraph_index is not None:
+                para_idx = paragraph_index
+            else:
+                # Use current view cursor page
+                page = vc.getPage()
+                para_idx = None
+
+            if page is None and para_idx is not None:
+                page = self._get_page_for_paragraph(doc, para_idx)
+
+        # Collect images on this page
+        images = []
+        if hasattr(doc, 'getGraphicObjects'):
+            graphics = doc.getGraphicObjects()
+            for name in graphics.getElementNames():
+                try:
+                    g = graphics.getByName(name)
+                    anchor = g.getAnchor()
+                    vc.gotoRange(anchor.getStart(), False)
+                    if vc.getPage() == page:
+                        size = g.getPropertyValue("Size")
+                        images.append({
+                            "name": name,
+                            "width_mm": size.Width // 100,
+                            "height_mm": size.Height // 100,
+                            "title": g.getPropertyValue("Title"),
+                        })
+                except Exception:
+                    pass
+
+        # Collect tables on this page
+        tables = []
+        if hasattr(doc, 'getTextTables'):
+            text_tables = doc.getTextTables()
+            for name in text_tables.getElementNames():
+                try:
+                    t = text_tables.getByName(name)
+                    anchor = t.getAnchor()
+                    vc.gotoRange(anchor.getStart(), False)
+                    if vc.getPage() == page:
+                        tables.append({
+                            "name": name,
+                            "rows": t.getRows().getCount(),
+                            "cols": t.getColumns().getCount(),
+                        })
+                except Exception:
+                    pass
+
+        return {
+            "success": True,
+            "page": page,
+            "images": images,
+            "tables": tables,
+        }
     
     def create_document(self, doc_type: str = "writer") -> Any:
         """
@@ -88,44 +193,101 @@ class UNOBridge:
     # ----------------------------------------------------------------
 
     def _find_open_document(self, file_url: str) -> Optional[Any]:
-        """Find an already-open document by its URL."""
+        """Find an already-open document by its URL (normalized comparison)."""
         try:
             components = self.desktop.getComponents()
             if components is None:
                 return None
+
+            # Normalize for comparison (lowercase on Windows, decode %xx)
+            import urllib.parse
+            norm = urllib.parse.unquote(file_url).lower().rstrip('/')
+
             enum = components.createEnumeration()
             while enum.hasMoreElements():
                 doc = enum.nextElement()
-                if hasattr(doc, 'getURL') and doc.getURL() == file_url:
+                if not hasattr(doc, 'getURL'):
+                    continue
+                doc_url = urllib.parse.unquote(doc.getURL()).lower().rstrip('/')
+                if doc_url == norm:
                     return doc
             return None
         except Exception:
             return None
 
-    def open_document(self, file_path: str) -> Dict[str, Any]:
-        """Open a document by file path, or return it if already open."""
+    def open_document(self, file_path: str,
+                      force: bool = False) -> Dict[str, Any]:
+        """Open a document by file path, or return it if already open.
+
+        Duplicate detection:
+        - Exact URL match → reuse the existing document (already_open=True)
+        - Same filename, different path → open normally but include a warning
+        - force=True → always open a new frame (_blank)
+        """
         try:
             file_url = uno.systemPathToFileUrl(file_path)
 
+            # Exact URL match → reuse existing document
             existing = self._find_open_document(file_url)
             if existing is not None:
                 return {"success": True, "doc": existing,
                         "url": file_url, "already_open": True}
 
+            # Same filename at different path → informational warning
+            import os
+            same_name_url = None
+            target_name = os.path.basename(file_path).lower()
+            try:
+                components = self.desktop.getComponents()
+                if components:
+                    enum = components.createEnumeration()
+                    while enum.hasMoreElements():
+                        doc = enum.nextElement()
+                        if hasattr(doc, 'getURL'):
+                            import urllib.parse
+                            doc_name = os.path.basename(
+                                urllib.parse.unquote(doc.getURL())).lower()
+                            if doc_name == target_name:
+                                same_name_url = doc.getURL()
+                                break
+            except Exception:
+                pass
+
             props = (
                 PropertyValue("Hidden", 0, False, 0),
                 PropertyValue("ReadOnly", 0, False, 0),
             )
-            doc = self.desktop.loadComponentFromURL(file_url, "_blank", 0, props)
+            target = "_blank" if force else "_default"
+            doc = self.desktop.loadComponentFromURL(file_url, target, 0, props)
             if doc is None:
                 return {"success": False,
                         "error": f"Failed to load document: {file_path}"}
 
             logger.info(f"Opened document: {file_path}")
-            return {"success": True, "doc": doc,
-                    "url": file_url, "already_open": False}
+            result = {"success": True, "doc": doc,
+                      "url": file_url, "already_open": False}
+            if same_name_url:
+                result["warning"] = (
+                    f"Another '{target_name}' is already open "
+                    f"from a different path: {same_name_url}")
+            return result
         except Exception as e:
             logger.error(f"Failed to open document: {e}")
+            return {"success": False, "error": str(e)}
+
+    def close_document(self, file_path: str) -> Dict[str, Any]:
+        """Close a document by file path. Does not save."""
+        try:
+            file_url = uno.systemPathToFileUrl(file_path)
+            doc = self._find_open_document(file_url)
+            if doc is None:
+                return {"success": True, "message": "Document was not open"}
+            doc.setModified(False)  # avoid save prompt
+            doc.close(True)
+            logger.info(f"Closed document: {file_path}")
+            return {"success": True}
+        except Exception as e:
+            logger.error(f"Failed to close document: {e}")
             return {"success": False, "error": str(e)}
 
     def _resolve_document(self, file_path: str = None) -> Any:
@@ -658,13 +820,34 @@ class UNOBridge:
                 enum.nextElement()
                 total += 1
 
+            # Add page numbers to headings (fast: ~20 VC moves)
+            try:
+                self._annotate_pages(children, doc)
+            except Exception as pe:
+                logger.debug(f"Could not annotate pages: {pe}")
+
+            # Page count
+            page_count = 0
+            try:
+                controller = doc.getCurrentController()
+                page_count = controller.getViewCursor().getPage()
+                # Jump to end to get actual last page
+                vc = controller.getViewCursor()
+                cursor = text.createTextCursor()
+                cursor.gotoEnd(False)
+                vc.gotoRange(cursor, False)
+                page_count = vc.getPage()
+            except Exception:
+                pass
+
             return {
                 "success": True,
                 "content_strategy": content_strategy,
                 "depth": depth,
                 "children": children,
                 "body_before_first_heading": tree["body_paragraphs"],
-                "total_paragraphs": total
+                "total_paragraphs": total,
+                "page_count": page_count,
             }
         except Exception as e:
             logger.error(f"Failed to get document tree: {e}")
@@ -847,6 +1030,8 @@ class UNOBridge:
             # Get existing bookmark map for heading paragraphs
             bookmark_map = self._get_mcp_bookmark_map(doc)
 
+            para_pages = []  # populated later if needed
+
             paragraphs = []
             current_index = 0
             end_index = start_index + count
@@ -872,6 +1057,8 @@ class UNOBridge:
                             "outline_level": outline_level,
                             "is_table": False
                         }
+                        if current_index < len(para_pages):
+                            para_entry["page"] = para_pages[current_index]
                         if current_index in bookmark_map:
                             para_entry["bookmark"] = bookmark_map[current_index]
                         paragraphs.append(para_entry)
@@ -1830,14 +2017,11 @@ class UNOBridge:
                         "error": "Document does not support graphic objects"}
 
             graphics = doc.getGraphicObjects()
+
             images = []
             for name in graphics.getElementNames():
                 graphic = graphics.getByName(name)
                 entry = {"name": name}
-                try:
-                    entry["url"] = graphic.getPropertyValue("GraphicURL")
-                except Exception:
-                    pass
                 try:
                     size = graphic.getPropertyValue("Size")
                     entry["width_mm"] = size.Width // 100
@@ -1911,14 +2095,24 @@ class UNOBridge:
                 except Exception:
                     pass
 
-            # Position in document
+            # Position in document — find anchor paragraph
             try:
                 anchor = graphic.getAnchor()
-                para_ranges = self._get_paragraph_ranges(doc)
-                info["paragraph_index"] = self._find_paragraph_for_range(
-                    anchor, para_ranges, doc.getText())
-            except Exception:
-                pass
+                text = doc.getText()
+                enum = text.createEnumeration()
+                para_idx = 0
+                while enum.hasMoreElements():
+                    para = enum.nextElement()
+                    try:
+                        if text.compareRegionStarts(para, anchor) >= 0 \
+                           and text.compareRegionEnds(para, anchor) <= 0:
+                            info["paragraph_index"] = para_idx
+                            break
+                    except Exception:
+                        pass
+                    para_idx += 1
+            except Exception as pe:
+                logger.debug(f"Could not resolve image anchor: {pe}")
 
             return info
         except Exception as e:

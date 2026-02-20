@@ -270,6 +270,32 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
         """
         return call_plugin("get_page_count", _p({}, path))
 
+    @mcp.tool()
+    def get_page_objects(page: Optional[int] = None,
+                         locator: Optional[str] = None,
+                         paragraph_index: Optional[int] = None,
+                         path: Optional[str] = None) -> Dict[str, Any]:
+        """Get images and tables on a page.
+
+        Pass page number directly, OR a locator/paragraph_index to
+        resolve the page automatically. Use this to find objects near
+        a paragraph or comment.
+
+        Args:
+            page: Page number (1-based)
+            locator: Locator to resolve page from (e.g. 'paragraph:89')
+            paragraph_index: Paragraph index to resolve page from
+            path: Absolute path to the document (optional, uses active doc)
+        """
+        params: Dict[str, Any] = {}
+        if page is not None:
+            params["page"] = page
+        if locator is not None:
+            params["locator"] = locator
+        if paragraph_index is not None:
+            params["paragraph_index"] = paragraph_index
+        return call_plugin("get_page_objects", _p(params, path))
+
     # ---------------------------------------------------------------
     # Document maintenance
     # ---------------------------------------------------------------

@@ -359,7 +359,8 @@ class HeadlessBackend(DocumentBackend):
         return get_document_info(str(path_obj))
 
     # -- open_document ------------------------------------------------------
-    def open_document(self, path: str, readonly: bool) -> Dict[str, Any]:
+    def open_document(self, path: str, readonly: bool,
+                      force: bool = False) -> Dict[str, Any]:
         path_obj = Path(path)
         if not path_obj.exists():
             raise FileNotFoundError(f"Document not found: {path}")

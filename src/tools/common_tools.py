@@ -95,45 +95,97 @@ def register(mcp, backend: DocumentBackend,
     @mcp.tool()
     def search_documents(query: str,
                          search_path: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Search for documents containing specific text
+        """Search for documents containing specific text.
+
+        By default searches only documents already open in LibreOffice (fast, no side effects).
+        Pass search_path to scan a directory on disk instead (slower, opens files).
 
         Args:
             query: Text to search for
-            search_path: Directory to search in (default: common document locations)
+            search_path: Directory to scan on disk (default: search open documents only)
         """
         results: List[Dict[str, Any]] = []
 
-        if search_path:
-            search_paths = [Path(search_path)]
-        else:
-            search_paths = [
-                Path.home() / "Documents",
-                Path.home() / "Desktop",
-                Path.cwd(),
-            ]
-
-        extensions = {'.odt', '.ods', '.odp', '.odg', '.doc', '.docx', '.txt'}
-
-        for search_dir in search_paths:
-            if not search_dir.exists():
-                continue
-            for ext in extensions:
-                for doc_path in search_dir.rglob(f'*{ext}'):
-                    if not doc_path.is_file():
-                        continue
+        # Default: search open documents via plugin
+        if not search_path:
+            try:
+                open_docs = call_plugin("list_open_documents", {})
+                for doc in open_docs.get("documents", []):
                     try:
-                        content = backend.read_document_text(str(doc_path))
-                        if query.lower() in content.content.lower():
+                        matches = call_plugin("search_in_document", {
+                            "pattern": query,
+                            "file_path": doc.get("url", ""),
+                            "max_results": 5,
+                            "context_paragraphs": 1,
+                        })
+                        if matches.get("matches"):
+                            previews = [m.get("match_text", "")
+                                        for m in matches["matches"][:3]]
                             results.append({
-                                "path": str(doc_path),
-                                "filename": doc_path.name,
-                                "format": doc_path.suffix.lower(),
-                                "word_count": content.word_count,
-                                "match_context": _get_match_context(
-                                    content.content, query),
+                                "path": doc.get("url", ""),
+                                "filename": doc.get("title", ""),
+                                "type": doc.get("type", ""),
+                                "word_count": doc.get("word_count", 0),
+                                "match_count": matches.get("total_matches", 0),
+                                "matches": previews,
                             })
                     except Exception:
                         continue
+            except Exception:
+                pass
+            return results
+
+        # Explicit path: scan filesystem, open/close docs one at a time
+        search_dir = Path(search_path)
+        if not search_dir.exists():
+            return results
+
+        extensions = {'.odt', '.ods', '.odp', '.odg', '.doc', '.docx', '.txt'}
+
+        # Get URLs of already-open docs to avoid closing them
+        open_urls: set = set()
+        try:
+            open_docs = call_plugin("list_open_documents", {})
+            for doc in open_docs.get("documents", []):
+                open_urls.add(doc.get("url", ""))
+        except Exception:
+            pass
+
+        for ext in extensions:
+            for doc_path in search_dir.rglob(f'*{ext}'):
+                if not doc_path.is_file():
+                    continue
+                file_url = doc_path.resolve().as_uri()
+                was_open = file_url in open_urls
+                try:
+                    if not was_open:
+                        call_plugin("open_document", {
+                            "file_path": str(doc_path)})
+                    matches = call_plugin("search_in_document", {
+                        "pattern": query,
+                        "file_path": str(doc_path),
+                        "max_results": 5,
+                        "context_paragraphs": 1,
+                    })
+                    if matches.get("matches"):
+                        previews = [m.get("match_text", "")
+                                    for m in matches["matches"][:3]]
+                        results.append({
+                            "path": str(doc_path),
+                            "filename": doc_path.name,
+                            "format": doc_path.suffix.lower(),
+                            "match_count": matches.get("total_matches", 0),
+                            "matches": previews,
+                        })
+                except Exception:
+                    pass
+                finally:
+                    if not was_open:
+                        try:
+                            call_plugin("close_document", {
+                                "file_path": str(doc_path)})
+                        except Exception:
+                            pass
         return results
 
     @mcp.tool()
@@ -239,14 +291,16 @@ def register(mcp, backend: DocumentBackend,
 
     @mcp.tool()
     def open_document_in_libreoffice(path: str,
-                                     readonly: bool = False) -> Dict[str, Any]:
+                                     readonly: bool = False,
+                                     force: bool = False) -> Dict[str, Any]:
         """Open a document in LibreOffice GUI for live viewing
 
         Args:
             path: Path to the document to open
             readonly: Whether to open in read-only mode (default: False)
+            force: Force open even if a document with the same name is already open
         """
-        return backend.open_document(path, readonly)
+        return backend.open_document(path, readonly, force=force)
 
     @mcp.tool()
     def refresh_document_in_libreoffice(path: str) -> Dict[str, Any]:
