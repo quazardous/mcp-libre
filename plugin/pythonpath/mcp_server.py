@@ -172,11 +172,47 @@ class LibreOfficeMCPServer:
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string",
-                                  "description": "Absolute file path"}
+                                  "description": "Absolute file path"},
+                    "force": {"type": "boolean", "default": False,
+                              "description": "Force open even if a document "
+                                             "with the same name is already open"}
                 },
                 "required": ["file_path"]
             },
             "handler": self._h_open_document
+        }
+
+        self.tools["close_document"] = {
+            "description": "Close a document by file path (no save)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "Absolute file path"}
+                },
+                "required": ["file_path"]
+            },
+            "handler": self._h_close_document
+        }
+
+        self.tools["get_page_objects"] = {
+            "description": "Get images and tables on a page. "
+                           "Pass page number OR locator to resolve the page.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "integer",
+                             "description": "Page number (1-based)"},
+                    "locator": {"type": "string",
+                                "description": "Locator to resolve page from "
+                                "(e.g. paragraph:89, bookmark:_mcp_x)"},
+                    "paragraph_index": {"type": "integer",
+                                        "description": "Paragraph index"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_get_page_objects
         }
 
         self.tools["get_document_tree"] = {
@@ -1154,9 +1190,20 @@ class LibreOfficeMCPServer:
     
     # -- Context-efficient tool handlers --
 
-    def _h_open_document(self, file_path: str) -> Dict[str, Any]:
-        result = self.uno_bridge.open_document(file_path)
+    def _h_open_document(self, file_path: str,
+                         force: bool = False) -> Dict[str, Any]:
+        result = self.uno_bridge.open_document(file_path, force=force)
         return {k: v for k, v in result.items() if k != "doc"}
+
+    def _h_close_document(self, file_path: str) -> Dict[str, Any]:
+        return self.uno_bridge.close_document(file_path)
+
+    def _h_get_page_objects(self, page: int = None,
+                             locator: str = None,
+                             paragraph_index: int = None,
+                             file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_page_objects(
+            page, locator, paragraph_index, file_path)
 
     def _h_get_document_tree(self, content_strategy: str = "first_lines",
                              depth: int = 1,
