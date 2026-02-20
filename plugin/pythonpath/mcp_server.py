@@ -367,12 +367,52 @@ class LibreOfficeMCPServer:
                     "text": {"type": "string", "description": "Text to insert"},
                     "position": {"type": "string", "enum": ["before", "after"],
                                  "description": "default: after"},
+                    "style": {"type": "string",
+                              "description": "Paragraph style for the new "
+                                             "paragraph (e.g. 'Text Body', "
+                                             "'Heading 1'). If omitted, "
+                                             "inherits from adjacent paragraph."},
                     "file_path": {"type": "string",
                                   "description": "File path (optional)"}
                 },
                 "required": ["text"]
             },
             "handler": self._h_insert_at_paragraph
+        }
+
+        self.tools["insert_paragraphs_batch"] = {
+            "description": "Insert multiple paragraphs in one call. "
+                           "Each item has text and optional style.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "locator": {
+                        "type": "string",
+                        "description": "Unified locator (e.g. 'paragraph:5', "
+                                       "'bookmark:_mcp_x')"
+                    },
+                    "paragraph_index": {"type": "integer",
+                                        "description": "Target paragraph (legacy)"},
+                    "paragraphs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "text": {"type": "string"},
+                                "style": {"type": "string"}
+                            },
+                            "required": ["text"]
+                        },
+                        "description": "List of {text, style?} to insert"
+                    },
+                    "position": {"type": "string", "enum": ["before", "after"],
+                                 "description": "default: after"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["paragraphs"]
+            },
+            "handler": self._h_insert_paragraphs_batch
         }
 
         self.tools["add_ai_summary"] = {
@@ -1450,9 +1490,18 @@ class LibreOfficeMCPServer:
                                text: str = "",
                                position: str = "after",
                                locator: str = None,
+                               style: str = None,
                                file_path: str = None) -> Dict[str, Any]:
         return self.uno_bridge.insert_at_paragraph(
-            paragraph_index, text, position, locator, file_path)
+            paragraph_index, text, position, locator, style, file_path)
+
+    def _h_insert_paragraphs_batch(self, paragraphs: list = None,
+                                    paragraph_index: int = None,
+                                    position: str = "after",
+                                    locator: str = None,
+                                    file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.insert_paragraphs_batch(
+            paragraphs or [], paragraph_index, position, locator, file_path)
 
     def _h_add_ai_summary(self, para_index: int = None,
                            summary: str = "",

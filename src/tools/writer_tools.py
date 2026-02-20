@@ -4,7 +4,7 @@ Replaces plugin_tools.py. All tools delegate to the LO plugin via call_plugin().
 Path is optional — omit it to use the active document.
 """
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 def _p(params: Dict[str, Any], path: Optional[str]) -> Dict[str, Any]:
@@ -146,7 +146,8 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
                                  path: Optional[str] = None,
                                  locator: Optional[str] = None,
                                  paragraph_index: Optional[int] = None,
-                                 position: str = "after") -> Dict[str, Any]:
+                                 position: str = "after",
+                                 style: Optional[str] = None) -> Dict[str, Any]:
         """Insert text before or after a specific paragraph.
 
         Preserves all existing formatting. Use locator for unified
@@ -158,13 +159,44 @@ def register(mcp, call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
             locator: Unified locator string (preferred)
             paragraph_index: Target paragraph index (legacy)
             position: 'before' or 'after' (default: after)
+            style: Paragraph style for the new paragraph (e.g. 'Text Body',
+                   'Heading 1'). If omitted, inherits from adjacent paragraph.
         """
         params: Dict[str, Any] = {"text": text, "position": position}
         if locator is not None:
             params["locator"] = locator
         if paragraph_index is not None:
             params["paragraph_index"] = paragraph_index
+        if style is not None:
+            params["style"] = style
         return call_plugin("insert_at_paragraph", _p(params, path))
+
+    @mcp.tool()
+    def insert_paragraphs_batch(paragraphs: List[Dict[str, str]],
+                                path: Optional[str] = None,
+                                locator: Optional[str] = None,
+                                paragraph_index: Optional[int] = None,
+                                position: str = "after") -> Dict[str, Any]:
+        """Insert multiple paragraphs in one call.
+
+        Each item in paragraphs is {"text": "...", "style": "..."}.
+        Style is optional — if omitted, inherits from adjacent paragraph.
+        All paragraphs are inserted in a single UNO transaction.
+
+        Args:
+            paragraphs: List of {text, style?} objects to insert
+            path: Absolute path to the document (optional, uses active doc)
+            locator: Unified locator string (preferred)
+            paragraph_index: Target paragraph index (legacy)
+            position: 'before' or 'after' (default: after)
+        """
+        params: Dict[str, Any] = {
+            "paragraphs": paragraphs, "position": position}
+        if locator is not None:
+            params["locator"] = locator
+        if paragraph_index is not None:
+            params["paragraph_index"] = paragraph_index
+        return call_plugin("insert_paragraphs_batch", _p(params, path))
 
     @mcp.tool()
     def add_document_ai_summary(summary: str,

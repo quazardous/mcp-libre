@@ -70,6 +70,9 @@ Controls body text in `get_document_tree` / `get_heading_children`:
 
 | Don't | Do instead |
 |---|---|
+| `insert_at_paragraph` then `set_paragraph_style` | `insert_at_paragraph(text="...", style="Text Body")` — one call |
+| Multiple `insert_at_paragraph` calls for a section | `insert_paragraphs_batch(paragraphs=[...])` — one call, no index drift |
+| Edit paragraphs inside Table of Contents | Editing indexes is blocked — use `refresh_indexes()` to update them |
 | `get_text_content_live` on big docs | `get_document_tree` + `read_paragraphs` |
 | `depth=0` on unknown docs | `depth=1`, then drill |
 | `content_strategy="full"` at depth > 1 | `"first_lines"`, then read specific paragraphs |
@@ -105,7 +108,8 @@ Controls body text in `get_document_tree` / `get_heading_children`:
 | Tool | What it does |
 |---|---|
 | `replace_in_document` | Global find & replace (preserves formatting) |
-| `insert_at_paragraph` | Insert text before/after a paragraph |
+| `insert_at_paragraph` | Insert text before/after a paragraph (optional `style`) |
+| `insert_paragraphs_batch` | Insert N paragraphs in one call (each with text + style) |
 | `set_paragraph_text` | Replace entire paragraph content (preserves style) |
 | `set_paragraph_style` | Change paragraph style (e.g. "Heading 1", "Text Body") |
 | `delete_paragraph` | Remove a paragraph |

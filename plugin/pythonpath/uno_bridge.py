@@ -1335,14 +1335,77 @@ class UNOBridge:
     # Editing
     # ----------------------------------------------------------------
 
+    def _is_inside_index(self, paragraph) -> Optional[str]:
+        """Check if a paragraph is inside a document index (ToC, etc.).
+
+        Returns the index name if inside one, None otherwise.
+        """
+        try:
+            section = paragraph.getPropertyValue("TextSection")
+            if section is None:
+                return None
+            # Check if the section itself is an index, or its parent is
+            si = section.supportsService
+            if (si("com.sun.star.text.BaseIndex") or
+                    si("com.sun.star.text.DocumentIndex") or
+                    si("com.sun.star.text.ContentIndex")):
+                return section.Name
+            # Some index sections are nested — check parent
+            if hasattr(section, 'ParentSection'):
+                parent = section.ParentSection
+                if parent is not None:
+                    pi = parent.supportsService
+                    if (pi("com.sun.star.text.BaseIndex") or
+                            pi("com.sun.star.text.DocumentIndex") or
+                            pi("com.sun.star.text.ContentIndex")):
+                        return parent.Name
+        except Exception:
+            pass
+        # Fallback: check if protected section (indexes are always protected)
+        try:
+            section = paragraph.getPropertyValue("TextSection")
+            if section and section.IsProtected:
+                return section.Name
+        except Exception:
+            pass
+        return None
+
+    def _resolve_style_name(self, doc, style_name: str) -> str:
+        """Resolve a style name case-insensitively.
+
+        Returns the exact name from the document's style pool,
+        or the original name if no match is found.
+        """
+        try:
+            families = doc.getStyleFamilies()
+            para_styles = families.getByName("ParagraphStyles")
+            # Exact match first
+            if para_styles.hasByName(style_name):
+                return style_name
+            # Case-insensitive fallback
+            lower = style_name.lower()
+            for name in para_styles.getElementNames():
+                if name.lower() == lower:
+                    return name
+        except Exception:
+            pass
+        return style_name
+
     def insert_at_paragraph(self, paragraph_index: int = None,
                             text: str = "",
                             position: str = "after",
                             locator: str = None,
+                            style: str = None,
                             file_path: str = None) -> Dict[str, Any]:
-        """Insert text before or after a specific paragraph."""
+        """Insert text before or after a specific paragraph.
+
+        If style is provided, the new paragraph gets that style instead
+        of inheriting from the adjacent paragraph.
+        """
         try:
             doc = self._resolve_document(file_path)
+            if style:
+                style = self._resolve_style_name(doc, style)
 
             # Resolve locator if provided
             if locator is not None and paragraph_index is None:
@@ -1368,6 +1431,14 @@ class UNOBridge:
                         "error": f"Paragraph {paragraph_index} not found "
                                  f"(max: {current_index})"}
 
+            # Guard: refuse to insert inside a document index (ToC, etc.)
+            idx_name = self._is_inside_index(target_para)
+            if idx_name:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} is inside "
+                                 f"index '{idx_name}'. Use refresh_indexes() "
+                                 f"instead of editing indexes directly."}
+
             cursor = doc_text.createTextCursorByRange(target_para)
 
             if position == "before":
@@ -1375,11 +1446,124 @@ class UNOBridge:
                 doc_text.insertString(cursor, text, False)
                 doc_text.insertControlCharacter(
                     cursor, PARAGRAPH_BREAK, False)
+                if style:
+                    cursor.gotoPreviousParagraph(False)
+                    cursor.gotoStartOfParagraph(False)
+                    cursor.gotoEndOfParagraph(True)
+                    cursor.setPropertyValue("ParaStyleName", style)
+                    cursor.gotoNextParagraph(False)
             elif position == "after":
                 cursor.gotoEndOfParagraph(False)
                 doc_text.insertControlCharacter(
                     cursor, PARAGRAPH_BREAK, False)
                 doc_text.insertString(cursor, text, False)
+                if style:
+                    cursor.gotoStartOfParagraph(False)
+                    cursor.gotoEndOfParagraph(True)
+                    cursor.setPropertyValue("ParaStyleName", style)
+                    cursor.gotoEndOfParagraph(False)
+            else:
+                return {"success": False,
+                        "error": f"Invalid position: {position}"}
+
+            if doc.hasLocation():
+                self._store_doc(doc)
+
+            result = {
+                "success": True,
+                "message": f"Inserted text {position} paragraph "
+                           f"{paragraph_index}",
+                "text_length": len(text)
+            }
+            if style:
+                result["style"] = style
+            return result
+        except Exception as e:
+            logger.error(f"Failed to insert at paragraph: {e}")
+            return {"success": False, "error": str(e)}
+
+    def insert_paragraphs_batch(self, paragraphs: list,
+                                paragraph_index: int = None,
+                                position: str = "after",
+                                locator: str = None,
+                                file_path: str = None) -> Dict[str, Any]:
+        """Insert multiple paragraphs in a single UNO transaction.
+
+        Each item in paragraphs is {text: str, style?: str}.
+        All paragraphs are inserted sequentially after (or before) the
+        target, in one call — no index drift between inserts.
+        """
+        try:
+            doc = self._resolve_document(file_path)
+
+            # Pre-resolve all style names (case-insensitive)
+            for item in paragraphs or []:
+                if item.get("style"):
+                    item["style"] = self._resolve_style_name(
+                        doc, item["style"])
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+            if not paragraphs:
+                return {"success": False, "error": "Empty paragraphs list"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+
+            current_index = 0
+            target_para = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if current_index == paragraph_index:
+                    target_para = element
+                    break
+                current_index += 1
+
+            if target_para is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            # Guard: refuse to insert inside a document index (ToC, etc.)
+            idx_name = self._is_inside_index(target_para)
+            if idx_name:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} is inside "
+                                 f"index '{idx_name}'. Use refresh_indexes() "
+                                 f"instead of editing indexes directly."}
+
+            cursor = doc_text.createTextCursorByRange(target_para)
+
+            if position == "before":
+                cursor.gotoStartOfParagraph(False)
+                for item in paragraphs:
+                    txt = item.get("text", "")
+                    sty = item.get("style")
+                    doc_text.insertString(cursor, txt, False)
+                    doc_text.insertControlCharacter(
+                        cursor, PARAGRAPH_BREAK, False)
+                    if sty:
+                        cursor.gotoPreviousParagraph(False)
+                        cursor.gotoStartOfParagraph(False)
+                        cursor.gotoEndOfParagraph(True)  # select whole para
+                        cursor.setPropertyValue("ParaStyleName", sty)
+                        cursor.gotoNextParagraph(False)
+            elif position == "after":
+                cursor.gotoEndOfParagraph(False)
+                for item in paragraphs:
+                    txt = item.get("text", "")
+                    sty = item.get("style")
+                    doc_text.insertControlCharacter(
+                        cursor, PARAGRAPH_BREAK, False)
+                    doc_text.insertString(cursor, txt, False)
+                    if sty:
+                        cursor.gotoStartOfParagraph(False)
+                        cursor.gotoEndOfParagraph(True)  # select whole para
+                        cursor.setPropertyValue("ParaStyleName", sty)
+                        cursor.gotoEndOfParagraph(False)
             else:
                 return {"success": False,
                         "error": f"Invalid position: {position}"}
@@ -1389,12 +1573,12 @@ class UNOBridge:
 
             return {
                 "success": True,
-                "message": f"Inserted text {position} paragraph "
-                           f"{paragraph_index}",
-                "text_length": len(text)
+                "message": f"Inserted {len(paragraphs)} paragraphs "
+                           f"{position} paragraph {paragraph_index}",
+                "count": len(paragraphs)
             }
         except Exception as e:
-            logger.error(f"Failed to insert at paragraph: {e}")
+            logger.error(f"Failed to insert paragraphs batch: {e}")
             return {"success": False, "error": str(e)}
 
     # ----------------------------------------------------------------
@@ -3511,6 +3695,13 @@ class UNOBridge:
                 return {"success": False,
                         "error": f"Paragraph {paragraph_index} not found"}
 
+            idx_name = self._is_inside_index(target)
+            if idx_name:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} is inside "
+                                 f"index '{idx_name}'. Indexes are "
+                                 f"auto-generated — use refresh_indexes()."}
+
             # Select the paragraph + its trailing break and delete
             cursor = doc_text.createTextCursorByRange(target)
             # Extend to include the paragraph break
@@ -3560,6 +3751,13 @@ class UNOBridge:
             if target is None:
                 return {"success": False,
                         "error": f"Paragraph {paragraph_index} not found"}
+
+            idx_name = self._is_inside_index(target)
+            if idx_name:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} is inside "
+                                 f"index '{idx_name}'. Indexes are "
+                                 f"auto-generated — use refresh_indexes()."}
 
             old_text = target.getString()
             target.setString(text)
@@ -3692,6 +3890,13 @@ class UNOBridge:
             if target is None:
                 return {"success": False,
                         "error": f"Paragraph {paragraph_index} not found"}
+
+            idx_name = self._is_inside_index(target)
+            if idx_name:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} is inside "
+                                 f"index '{idx_name}'. Indexes are "
+                                 f"auto-generated — use refresh_indexes()."}
 
             old_style = target.getPropertyValue("ParaStyleName")
             target.setPropertyValue("ParaStyleName", style_name)
