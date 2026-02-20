@@ -18,12 +18,19 @@ See [docs/prerequisites.md](docs/prerequisites.md) for install commands per plat
 ## Installation
 
 ```bash
-git clone https://github.com/patrup/mcp-libre/
+git clone https://github.com/quazardous/mcp-libre/
 cd mcp-libre
 uv sync
 ```
 
-Windows: `.\install.ps1` installs everything automatically. See [docs/windows-setup.md](docs/windows-setup.md).
+The install scripts check/install all dependencies (Python 3.12+, LibreOffice, UV) and generate the Claude Desktop configuration automatically:
+
+| Platform | Command | Details |
+|----------|---------|---------|
+| **Linux** | `./install.sh` | Supports apt, dnf, pacman, zypper, brew |
+| **Windows** | `.\install.ps1` | See [docs/windows-setup.md](docs/windows-setup.md) |
+
+Options: `--check-only` (status only), `--skip-optional` (skip Node.js/Java), `--plugin` (build + install extension).
 
 ## Modes
 
@@ -50,18 +57,21 @@ Requires the LibreOffice extension installed (see below).
 
 The extension embeds an HTTP API server inside LibreOffice (port 8765) with direct UNO API access.
 
-### Install (Windows)
+### Install
 
-```powershell
-.\install.ps1 -Plugin        # build .oxt and install via unopkg
-```
+| Platform | Command |
+|----------|---------|
+| **Linux** | `./install.sh --plugin` |
+| **Windows** | `.\install.ps1 -Plugin` |
 
-### Dev workflow (Windows)
+### Dev workflow
 
-```powershell
-.\scripts\dev-deploy.ps1     # sync plugin/ to build/dev/ + junction in LO extensions
-# Then restart LibreOffice
-```
+| Platform | Command |
+|----------|---------|
+| **Linux** | `./scripts/dev-deploy.sh` |
+| **Windows** | `.\scripts\dev-deploy.ps1` |
+
+Then restart LibreOffice to pick up changes.
 
 The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restart, Status, and About.
 
@@ -118,10 +128,31 @@ The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restar
 
 ## Configuration
 
-Add the following MCP server entry to your config (adapt paths to your system):
+The install scripts generate the Claude Desktop configuration automatically. To configure manually, add the MCP server entry to your config:
 
-- **Claude Desktop**: `%APPDATA%\Claude\claude_desktop_config.json` (Windows) or `~/.config/claude/claude_desktop_config.json` (Linux)
+- **Claude Desktop**: `~/.config/claude/claude_desktop_config.json` (Linux) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 - **Claude Code**: `.mcp.json` at the project root
+
+**Linux:**
+
+```json
+{
+  "mcpServers": {
+    "libreoffice": {
+      "command": "/home/you/.local/bin/uv",
+      "args": ["run", "python", "src/main.py"],
+      "cwd": "/home/you/mcp-libre",
+      "env": {
+        "PYTHONPATH": "/home/you/mcp-libre/src",
+        "MCP_LIBREOFFICE_GUI": "1",
+        "MCP_PLUGIN_URL": "http://localhost:8765"
+      }
+    }
+  }
+}
+```
+
+**Windows:**
 
 ```json
 {
@@ -139,8 +170,6 @@ Add the following MCP server entry to your config (adapt paths to your system):
   }
 }
 ```
-
-> The install scripts (`./install.sh` on Linux, `.\install.ps1` on Windows) generate the Claude Desktop configuration automatically.
 
 ## Documentation
 
