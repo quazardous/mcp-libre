@@ -18,7 +18,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$ProjectRoot = $PSScriptRoot
+$ProjectRoot = Split-Path $PSScriptRoot
 $PluginDir   = Join-Path $ProjectRoot "plugin"
 $DevDir      = Join-Path $ProjectRoot "build\dev"
 $ExtName     = "mcp-libre"
@@ -76,7 +76,7 @@ Copy-Item (Join-Path $PluginDir "pythonpath\registration.py") $DevDir
 # pythonpath/ — helper modules
 $devPy = Join-Path $DevDir "pythonpath"
 New-Item -ItemType Directory -Path $devPy -Force | Out-Null
-foreach ($f in @("uno_bridge.py", "mcp_server.py", "ai_interface.py")) {
+foreach ($f in @("uno_bridge.py", "mcp_server.py", "ai_interface.py", "main_thread_executor.py", "version.py")) {
     Copy-Item (Join-Path $PluginDir "pythonpath\$f") $devPy
 }
 
@@ -94,8 +94,11 @@ Get-ChildItem $DevDir -Filter "*.py" -Recurse | ForEach-Object {
     }
 }
 
+# AGENT.md (served by HTTP endpoint)
+Copy-Item (Join-Path $ProjectRoot "AGENT.md") $DevDir
+
 # XCU/XCS config files
-foreach ($f in @("Addons.xcu", "ProtocolHandler.xcu", "MCPServerConfig.xcs", "MCPServerConfig.xcu", "OptionsDialog.xcu")) {
+foreach ($f in @("Addons.xcu", "ProtocolHandler.xcu", "MCPServerConfig.xcs", "MCPServerConfig.xcu", "OptionsDialog.xcu", "Jobs.xcu")) {
     Copy-Item (Join-Path $PluginDir $f) $DevDir
 }
 
@@ -123,13 +126,14 @@ $manifestXml = @'
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="Addons.xcu"/>
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="ProtocolHandler.xcu"/>
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="OptionsDialog.xcu"/>
+    <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="Jobs.xcu"/>
 </manifest:manifest>
 '@
 Write-Utf8NoBom (Join-Path $devMeta "manifest.xml") $manifestXml
 
 # description.xml
-# Read version from registration.py
-$regContent = Get-Content (Join-Path $PluginDir "pythonpath\registration.py") -Raw
+# Read version from version.py (single source of truth)
+$regContent = Get-Content (Join-Path $PluginDir "pythonpath\version.py") -Raw
 $version = "0.0.0"
 if ($regContent -match 'EXTENSION_VERSION\s*=\s*"([^"]+)"') {
     $version = $Matches[1]
@@ -175,8 +179,29 @@ if (Test-Path $JunctionPath) {
 Get-ChildItem $DevDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
 
+# ── Re-register bundled extensions (needed for Jobs.xcu / new components) ────
+
+$unopkg = Join-Path (Split-Path $LOExtDir) "program\unopkg"
+if (-not (Test-Path $unopkg)) {
+    $unopkg = "C:\Program Files\LibreOffice\program\unopkg.exe"
+}
+if (Test-Path $unopkg) {
+    # unopkg creates a user profile lock — make sure no LO is running
+    Get-Process soffice*, soffice.bin -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
+    $ErrorActionPreference = "Continue"
+    & $unopkg reinstall --bundled 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
+    # Clean up residual lock left by unopkg
+    $lockFile = Join-Path $env:APPDATA "LibreOffice\4\user\.lock"
+    if (Test-Path $lockFile) { Remove-Item $lockFile -Force }
+    Write-Host "[OK] Bundled extensions re-registered (unopkg reinstall)" -ForegroundColor Green
+} else {
+    Write-Host "[!] unopkg not found, skip bundled reinstall" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "=== Done ===" -ForegroundColor Green
 Write-Host "  Restart LibreOffice to load v$version" -ForegroundColor Gray
-Write-Host "  Edit plugin/*.py, run .\dev-deploy.ps1, restart LO" -ForegroundColor Gray
+Write-Host "  Edit plugin/*.py, run .\scripts\dev-deploy.ps1, restart LO" -ForegroundColor Gray
 Write-Host ""

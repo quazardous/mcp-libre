@@ -21,6 +21,7 @@ from typing import Any, Optional, Dict, List, Tuple
 import logging
 import traceback
 import uuid
+import time as _time
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,8 @@ class UNOBridge:
             self.smgr = self.ctx.ServiceManager
             self.desktop = self.smgr.createInstanceWithContext(
                 "com.sun.star.frame.Desktop", self.ctx)
+            self._toolkit = self.smgr.createInstanceWithContext(
+                "com.sun.star.awt.Toolkit", self.ctx)
             logger.info("UNO Bridge initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize UNO Bridge: {e}")
@@ -136,6 +139,100 @@ class UNOBridge:
         if doc is None:
             raise RuntimeError("No active document and no file path provided")
         return doc
+
+    # ----------------------------------------------------------------
+    # Locator resolution
+    # ----------------------------------------------------------------
+
+    def _resolve_locator(self, doc, locator: str) -> Dict[str, Any]:
+        """Parse 'type:value' locator and resolve to document position.
+
+        Writer locators:
+          bookmark:_mcp_abc123   -> para_index via bookmarks
+          paragraph:42           -> direct index
+          page:3                 -> first paragraph of page 3 (XPageCursor)
+          section:Introduction   -> first para_index of named section
+          heading:2.1            -> hierarchical heading navigation
+
+        Calc locators:
+          cell:A1 / cell:Sheet1.A1
+          range:A1:D10 / range:Sheet1.A1:D10
+          sheet:Sheet1
+
+        Impress locators:
+          slide:3
+        """
+        loc_type, sep, loc_value = locator.partition(":")
+        if not sep:
+            raise ValueError(f"Invalid locator format: '{locator}'. "
+                             "Expected 'type:value'.")
+
+        # -- Writer locators --
+        if loc_type == "bookmark":
+            result = self.resolve_bookmark(loc_value)
+            if not result.get("success"):
+                raise ValueError(result.get("error",
+                                            f"Bookmark '{loc_value}' not found"))
+            return {"para_index": result["para_index"]}
+
+        if loc_type == "paragraph":
+            return {"para_index": int(loc_value)}
+
+        if loc_type == "page":
+            page_num = int(loc_value)
+            try:
+                controller = doc.getCurrentController()
+                vc = controller.getViewCursor()
+                vc.jumpToPage(page_num)
+                vc.jumpToStartOfPage()
+                # Find which paragraph the view cursor is in
+                anchor = vc.getStart()
+                para_ranges = self._get_paragraph_ranges(doc)
+                text_obj = doc.getText()
+                para_idx = self._find_paragraph_for_range(
+                    anchor, para_ranges, text_obj)
+                return {"para_index": para_idx}
+            except Exception as e:
+                raise ValueError(
+                    f"Cannot resolve page:{loc_value} — {e}")
+
+        if loc_type == "section":
+            if not hasattr(doc, 'getTextSections'):
+                raise ValueError("Document does not support sections")
+            sections = doc.getTextSections()
+            if not sections.hasByName(loc_value):
+                raise ValueError(f"Section '{loc_value}' not found")
+            section = sections.getByName(loc_value)
+            anchor = section.getAnchor()
+            para_ranges = self._get_paragraph_ranges(doc)
+            text_obj = doc.getText()
+            para_idx = self._find_paragraph_for_range(
+                anchor, para_ranges, text_obj)
+            return {"para_index": para_idx, "section_name": loc_value}
+
+        if loc_type == "heading":
+            # Parse "2" or "2.1" -> list of 1-based indices per level
+            parts = [int(p) for p in loc_value.split(".")]
+            tree = self._build_heading_tree(doc)
+            node = tree
+            for part in parts:
+                children = node.get("children", [])
+                if part < 1 or part > len(children):
+                    raise ValueError(
+                        f"Heading index {part} out of range "
+                        f"(1..{len(children)}) in '{locator}'")
+                node = children[part - 1]
+            return {"para_index": node["para_index"]}
+
+        # -- Calc locators --
+        if loc_type in ("cell", "range", "sheet"):
+            return {"loc_type": loc_type, "loc_value": loc_value}
+
+        # -- Impress locators --
+        if loc_type == "slide":
+            return {"slide_index": int(loc_value)}
+
+        raise ValueError(f"Unknown locator type: '{loc_type}'")
 
     # ----------------------------------------------------------------
     # Heading bookmark management (stable IDs)
@@ -535,7 +632,7 @@ class UNOBridge:
         """
         try:
             doc = self._resolve_document(file_path)
-            if not isinstance(doc, XTextDocument):
+            if not self._is_writer(doc):
                 return {"success": False,
                         "error": "Not a Writer document"}
 
@@ -575,6 +672,7 @@ class UNOBridge:
 
     def get_heading_children(self, heading_para_index: int = None,
                              heading_bookmark: str = None,
+                             locator: str = None,
                              content_strategy: str = "first_lines",
                              depth: int = 1,
                              file_path: str = None) -> Dict[str, Any]:
@@ -583,18 +681,24 @@ class UNOBridge:
         Args:
             heading_para_index: Paragraph index of the parent heading
             heading_bookmark: Bookmark name (alternative to para_index)
+            locator: Unified locator string (e.g. "bookmark:_mcp_x", "heading:2.1")
             content_strategy: none, first_lines, ai_summary_first, full
             depth: How many sub-levels to include (1=direct, 0=all)
             file_path: Optional file path
         """
         try:
             doc = self._resolve_document(file_path)
-            if not isinstance(doc, XTextDocument):
+            if not self._is_writer(doc):
                 return {"success": False,
                         "error": "Not a Writer document"}
 
+            # Resolve locator first (takes priority)
+            if locator is not None and heading_para_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                heading_para_index = resolved.get("para_index")
+
             # Resolve bookmark to para_index if provided
-            if heading_bookmark is not None and heading_para_index is None:
+            elif heading_bookmark is not None and heading_para_index is None:
                 if not hasattr(doc, 'getBookmarks'):
                     return {"success": False,
                             "error": "Document doesn't support bookmarks"}
@@ -610,7 +714,7 @@ class UNOBridge:
 
             if heading_para_index is None:
                 return {"success": False,
-                        "error": "Provide heading_para_index or heading_bookmark"}
+                        "error": "Provide locator, heading_para_index, or heading_bookmark"}
 
             tree = self._build_heading_tree(doc)
             bookmark_map = self._ensure_heading_bookmarks(doc)
@@ -724,11 +828,19 @@ class UNOBridge:
             logger.error(f"Failed to get paragraph count: {e}")
             return {"success": False, "error": str(e)}
 
-    def read_paragraphs(self, start_index: int, count: int = 10,
+    def read_paragraphs(self, start_index: int = None, count: int = 10,
+                        locator: str = None,
                         file_path: str = None) -> Dict[str, Any]:
-        """Read a range of paragraphs by index."""
+        """Read a range of paragraphs by index or locator."""
         try:
             doc = self._resolve_document(file_path)
+
+            # Resolve locator if provided
+            if locator is not None and start_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                start_index = resolved.get("para_index", 0)
+            if start_index is None:
+                start_index = 0
             text = doc.getText()
             enum = text.createEnumeration()
 
@@ -910,12 +1022,22 @@ class UNOBridge:
     # Editing
     # ----------------------------------------------------------------
 
-    def insert_at_paragraph(self, paragraph_index: int, text: str,
+    def insert_at_paragraph(self, paragraph_index: int = None,
+                            text: str = "",
                             position: str = "after",
+                            locator: str = None,
                             file_path: str = None) -> Dict[str, Any]:
         """Insert text before or after a specific paragraph."""
         try:
             doc = self._resolve_document(file_path)
+
+            # Resolve locator if provided
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
             doc_text = doc.getText()
             enum = doc_text.createEnumeration()
 
@@ -966,11 +1088,20 @@ class UNOBridge:
     # AI annotations
     # ----------------------------------------------------------------
 
-    def add_ai_summary(self, para_index: int, summary: str,
+    def add_ai_summary(self, para_index: int = None, summary: str = "",
+                       locator: str = None,
                        file_path: str = None) -> Dict[str, Any]:
         """Add an MCP-AI annotation at a heading paragraph."""
         try:
             doc = self._resolve_document(file_path)
+
+            # Resolve locator if provided
+            if locator is not None and para_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                para_index = resolved.get("para_index")
+            if para_index is None:
+                return {"success": False,
+                        "error": "Provide locator or para_index"}
             doc_text = doc.getText()
 
             # Remove existing MCP-AI annotation at this paragraph first
@@ -1032,11 +1163,20 @@ class UNOBridge:
             logger.error(f"Failed to get AI summaries: {e}")
             return {"success": False, "error": str(e)}
 
-    def remove_ai_summary(self, para_index: int,
+    def remove_ai_summary(self, para_index: int = None,
+                          locator: str = None,
                           file_path: str = None) -> Dict[str, Any]:
         """Remove an MCP-AI annotation from a paragraph."""
         try:
             doc = self._resolve_document(file_path)
+
+            # Resolve locator if provided
+            if locator is not None and para_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                para_index = resolved.get("para_index")
+            if para_index is None:
+                return {"success": False,
+                        "error": "Provide locator or para_index"}
             removed = self._remove_ai_annotation_at(doc, para_index)
 
             if removed and doc.hasLocation():
@@ -1079,6 +1219,872 @@ class UNOBridge:
         except Exception as e:
             logger.error(f"Failed to remove AI annotation: {e}")
         return False
+
+    # ----------------------------------------------------------------
+    # Comments (human review workflow)
+    # ----------------------------------------------------------------
+
+    def list_comments(self, file_path: str = None) -> Dict[str, Any]:
+        """List all comments (annotations) in the document."""
+        try:
+            doc = self._resolve_document(file_path)
+            fields = doc.getTextFields()
+            enum = fields.createEnumeration()
+            para_ranges = self._get_paragraph_ranges(doc)
+            text_obj = doc.getText()
+
+            comments = []
+            while enum.hasMoreElements():
+                field = enum.nextElement()
+                if not field.supportsService(
+                        "com.sun.star.text.textfield.Annotation"):
+                    continue
+                try:
+                    author = field.getPropertyValue("Author")
+                except Exception:
+                    author = ""
+                # Skip MCP-AI summaries (handled separately)
+                if author == "MCP-AI":
+                    continue
+
+                content = field.getPropertyValue("Content")
+                name = ""
+                parent_name = ""
+                resolved = False
+                try:
+                    name = field.getPropertyValue("Name")
+                except Exception:
+                    pass
+                try:
+                    parent_name = field.getPropertyValue("ParentName")
+                except Exception:
+                    pass
+                try:
+                    resolved = field.getPropertyValue("Resolved")
+                except Exception:
+                    pass
+
+                # Date
+                date_str = ""
+                try:
+                    dt = field.getPropertyValue("DateTimeValue")
+                    date_str = (f"{dt.Year:04d}-{dt.Month:02d}-{dt.Day:02d} "
+                                f"{dt.Hours:02d}:{dt.Minutes:02d}")
+                except Exception:
+                    pass
+
+                # Position
+                anchor = field.getAnchor()
+                para_idx = self._find_paragraph_for_range(
+                    anchor, para_ranges, text_obj)
+                anchor_preview = anchor.getString()[:80]
+
+                entry = {
+                    "author": author,
+                    "content": content,
+                    "date": date_str,
+                    "resolved": resolved,
+                    "paragraph_index": para_idx,
+                    "anchor_preview": anchor_preview,
+                }
+                if name:
+                    entry["name"] = name
+                if parent_name:
+                    entry["parent_name"] = parent_name
+                    entry["is_reply"] = True
+                else:
+                    entry["is_reply"] = False
+                comments.append(entry)
+
+            return {"success": True, "comments": comments,
+                    "count": len(comments)}
+        except Exception as e:
+            logger.error(f"Failed to list comments: {e}")
+            return {"success": False, "error": str(e)}
+
+    def add_comment(self, content: str, author: str = "AI Agent",
+                    paragraph_index: int = None,
+                    locator: str = None,
+                    file_path: str = None) -> Dict[str, Any]:
+        """Add a comment at a paragraph."""
+        try:
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+            idx = 0
+            target = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if idx == paragraph_index:
+                    target = element
+                    break
+                idx += 1
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            annotation = doc.createInstance(
+                "com.sun.star.text.textfield.Annotation")
+            annotation.setPropertyValue("Author", author)
+            annotation.setPropertyValue("Content", content)
+
+            cursor = doc_text.createTextCursorByRange(target.getStart())
+            doc_text.insertTextContent(cursor, annotation, False)
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True,
+                    "message": f"Comment added at paragraph {paragraph_index}",
+                    "author": author}
+        except Exception as e:
+            logger.error(f"Failed to add comment: {e}")
+            return {"success": False, "error": str(e)}
+
+    def resolve_comment(self, comment_name: str,
+                        resolution: str = "",
+                        author: str = "AI Agent",
+                        file_path: str = None) -> Dict[str, Any]:
+        """Resolve a comment with an optional reason. Adds a reply then marks resolved."""
+        try:
+            doc = self._resolve_document(file_path)
+            fields = doc.getTextFields()
+            enum = fields.createEnumeration()
+            target = None
+
+            while enum.hasMoreElements():
+                field = enum.nextElement()
+                if not field.supportsService(
+                        "com.sun.star.text.textfield.Annotation"):
+                    continue
+                try:
+                    name = field.getPropertyValue("Name")
+                except Exception:
+                    continue
+                if name == comment_name:
+                    target = field
+                    break
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Comment '{comment_name}' not found"}
+
+            # Add a reply with the resolution reason if provided
+            if resolution:
+                reply = doc.createInstance(
+                    "com.sun.star.text.textfield.Annotation")
+                reply.setPropertyValue("Author", author)
+                reply.setPropertyValue("Content", resolution)
+                try:
+                    reply.setPropertyValue("ParentName", comment_name)
+                except Exception:
+                    pass  # Older LO versions may not support ParentName
+
+                anchor = target.getAnchor()
+                cursor = doc.getText().createTextCursorByRange(anchor)
+                doc.getText().insertTextContent(cursor, reply, False)
+
+            # Mark the original comment as resolved
+            try:
+                target.setPropertyValue("Resolved", True)
+            except Exception:
+                pass  # Resolved property may not exist in older versions
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True,
+                    "comment": comment_name,
+                    "resolved": True,
+                    "resolution": resolution}
+        except Exception as e:
+            logger.error(f"Failed to resolve comment: {e}")
+            return {"success": False, "error": str(e)}
+
+    def delete_comment(self, comment_name: str,
+                       file_path: str = None) -> Dict[str, Any]:
+        """Delete a comment by its name."""
+        try:
+            doc = self._resolve_document(file_path)
+            fields = doc.getTextFields()
+            enum = fields.createEnumeration()
+            text_obj = doc.getText()
+            deleted = 0
+
+            # Collect all comments to delete (parent + replies)
+            to_delete = []
+            while enum.hasMoreElements():
+                field = enum.nextElement()
+                if not field.supportsService(
+                        "com.sun.star.text.textfield.Annotation"):
+                    continue
+                try:
+                    name = field.getPropertyValue("Name")
+                    parent = field.getPropertyValue("ParentName")
+                except Exception:
+                    continue
+                if name == comment_name or parent == comment_name:
+                    to_delete.append(field)
+
+            for field in to_delete:
+                text_obj.removeTextContent(field)
+                deleted += 1
+
+            if deleted > 0 and doc.hasLocation():
+                doc.store()
+
+            return {"success": True, "deleted": deleted,
+                    "comment": comment_name}
+        except Exception as e:
+            logger.error(f"Failed to delete comment: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Document Protection
+    # ----------------------------------------------------------------
+
+    def _get_document_settings(self, doc):
+        """Get the document settings object (try multiple approaches)."""
+        # Try createInstance first
+        try:
+            return doc.createInstance(
+                "com.sun.star.document.Settings")
+        except Exception:
+            pass
+        # Fall back to direct property access on the document
+        return doc
+
+    def set_document_protection(self, enabled: bool,
+                                file_path: str = None) -> Dict[str, Any]:
+        """Lock or unlock the document for human editing.
+
+        Uses ProtectForm — no password, just a boolean toggle.
+        UI becomes read-only but UNO/MCP calls still work normally.
+        """
+        try:
+            doc = self._resolve_document(file_path)
+            settings = self._get_document_settings(doc)
+            currently_protected = settings.getPropertyValue("ProtectForm")
+
+            if enabled == currently_protected:
+                return {"success": True,
+                        "protected": currently_protected,
+                        "message": "No change needed (already "
+                                   f"{'protected' if currently_protected else 'unprotected'})"}
+
+            settings.setPropertyValue("ProtectForm", enabled)
+            settings.setPropertyValue("ProtectBookmarks", enabled)
+            settings.setPropertyValue("ProtectFields", enabled)
+
+            if enabled:
+                return {"success": True, "protected": True,
+                        "message": "Document locked (ProtectForm). "
+                                   "UNO/MCP edits still work."}
+            else:
+                return {"success": True, "protected": False,
+                        "message": "Document unlocked. Human can edit."}
+        except Exception as e:
+            logger.error(f"Failed to set document protection: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Track Changes
+    # ----------------------------------------------------------------
+
+    def set_track_changes(self, enabled: bool,
+                          file_path: str = None) -> Dict[str, Any]:
+        """Enable or disable change tracking."""
+        try:
+            doc = self._resolve_document(file_path)
+            doc.setPropertyValue("RecordChanges", enabled)
+            return {"success": True, "record_changes": enabled}
+        except Exception as e:
+            logger.error(f"Failed to set track changes: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_tracked_changes(self,
+                            file_path: str = None) -> Dict[str, Any]:
+        """List all tracked changes (redlines)."""
+        try:
+            doc = self._resolve_document(file_path)
+            recording = doc.getPropertyValue("RecordChanges")
+
+            if not hasattr(doc, 'getRedlines'):
+                return {"success": False,
+                        "error": "Document does not support redlines"}
+
+            redlines = doc.getRedlines()
+            enum = redlines.createEnumeration()
+            changes = []
+            while enum.hasMoreElements():
+                redline = enum.nextElement()
+                entry = {}
+                for prop in ("RedlineType", "RedlineAuthor",
+                             "RedlineComment", "RedlineIdentifier"):
+                    try:
+                        entry[prop] = redline.getPropertyValue(prop)
+                    except Exception:
+                        pass
+                try:
+                    dt = redline.getPropertyValue("RedlineDateTime")
+                    entry["date"] = (f"{dt.Year:04d}-{dt.Month:02d}-"
+                                     f"{dt.Day:02d} {dt.Hours:02d}:"
+                                     f"{dt.Minutes:02d}")
+                except Exception:
+                    pass
+                changes.append(entry)
+
+            return {"success": True, "recording": recording,
+                    "changes": changes, "count": len(changes)}
+        except Exception as e:
+            logger.error(f"Failed to get tracked changes: {e}")
+            return {"success": False, "error": str(e)}
+
+    def accept_all_changes(self,
+                           file_path: str = None) -> Dict[str, Any]:
+        """Accept all tracked changes."""
+        try:
+            doc = self._resolve_document(file_path)
+            dispatcher = self.smgr.createInstanceWithContext(
+                "com.sun.star.frame.DispatchHelper", self.ctx)
+            frame = doc.getCurrentController().getFrame()
+            dispatcher.executeDispatch(
+                frame, ".uno:AcceptAllTrackedChanges", "", 0, ())
+            if doc.hasLocation():
+                doc.store()
+            return {"success": True, "message": "All changes accepted"}
+        except Exception as e:
+            logger.error(f"Failed to accept all changes: {e}")
+            return {"success": False, "error": str(e)}
+
+    def reject_all_changes(self,
+                           file_path: str = None) -> Dict[str, Any]:
+        """Reject all tracked changes."""
+        try:
+            doc = self._resolve_document(file_path)
+            dispatcher = self.smgr.createInstanceWithContext(
+                "com.sun.star.frame.DispatchHelper", self.ctx)
+            frame = doc.getCurrentController().getFrame()
+            dispatcher.executeDispatch(
+                frame, ".uno:RejectAllTrackedChanges", "", 0, ())
+            if doc.hasLocation():
+                doc.store()
+            return {"success": True, "message": "All changes rejected"}
+        except Exception as e:
+            logger.error(f"Failed to reject all changes: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Styles
+    # ----------------------------------------------------------------
+
+    def list_styles(self, family: str = "ParagraphStyles",
+                    file_path: str = None) -> Dict[str, Any]:
+        """List available styles.
+
+        Args:
+            family: ParagraphStyles, CharacterStyles, PageStyles,
+                    FrameStyles, NumberingStyles
+        """
+        try:
+            doc = self._resolve_document(file_path)
+            families = doc.getStyleFamilies()
+
+            if not families.hasByName(family):
+                available = list(families.getElementNames())
+                return {"success": False,
+                        "error": f"Unknown style family: {family}",
+                        "available_families": available}
+
+            style_family = families.getByName(family)
+            styles = []
+            for name in style_family.getElementNames():
+                style = style_family.getByName(name)
+                entry = {
+                    "name": name,
+                    "is_user_defined": style.isUserDefined(),
+                    "is_in_use": style.isInUse(),
+                }
+                try:
+                    entry["parent_style"] = style.getPropertyValue(
+                        "ParentStyle")
+                except Exception:
+                    pass
+                styles.append(entry)
+
+            return {"success": True, "family": family,
+                    "styles": styles, "count": len(styles)}
+        except Exception as e:
+            logger.error(f"Failed to list styles: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_style_info(self, style_name: str,
+                       family: str = "ParagraphStyles",
+                       file_path: str = None) -> Dict[str, Any]:
+        """Get detailed properties of a style."""
+        try:
+            doc = self._resolve_document(file_path)
+            families = doc.getStyleFamilies()
+            style_family = families.getByName(family)
+
+            if not style_family.hasByName(style_name):
+                return {"success": False,
+                        "error": f"Style '{style_name}' not found in {family}"}
+
+            style = style_family.getByName(style_name)
+            info = {
+                "name": style_name,
+                "family": family,
+                "is_user_defined": style.isUserDefined(),
+                "is_in_use": style.isInUse(),
+            }
+
+            # Common properties
+            props_to_read = {
+                "ParagraphStyles": [
+                    "ParentStyle", "FollowStyle",
+                    "CharFontName", "CharHeight", "CharWeight",
+                    "ParaAdjust", "ParaTopMargin", "ParaBottomMargin",
+                ],
+                "CharacterStyles": [
+                    "ParentStyle", "CharFontName", "CharHeight",
+                    "CharWeight", "CharPosture", "CharColor",
+                ],
+            }
+
+            for prop_name in props_to_read.get(family, []):
+                try:
+                    val = style.getPropertyValue(prop_name)
+                    info[prop_name] = val
+                except Exception:
+                    pass
+
+            return {"success": True, **info}
+        except Exception as e:
+            logger.error(f"Failed to get style info: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Writer Tables
+    # ----------------------------------------------------------------
+
+    def list_tables(self, file_path: str = None) -> Dict[str, Any]:
+        """List all text tables in the document."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not hasattr(doc, 'getTextTables'):
+                return {"success": False,
+                        "error": "Document does not support text tables"}
+
+            tables_sup = doc.getTextTables()
+            tables = []
+            for name in tables_sup.getElementNames():
+                table = tables_sup.getByName(name)
+                rows = table.getRows().getCount()
+                cols = table.getColumns().getCount()
+                tables.append({
+                    "name": name,
+                    "rows": rows,
+                    "cols": cols,
+                })
+            return {"success": True, "tables": tables,
+                    "count": len(tables)}
+        except Exception as e:
+            logger.error(f"Failed to list tables: {e}")
+            return {"success": False, "error": str(e)}
+
+    def read_table(self, table_name: str,
+                   file_path: str = None) -> Dict[str, Any]:
+        """Read all cell contents from a Writer table."""
+        try:
+            doc = self._resolve_document(file_path)
+            tables_sup = doc.getTextTables()
+
+            if not tables_sup.hasByName(table_name):
+                return {"success": False,
+                        "error": f"Table '{table_name}' not found",
+                        "available": list(tables_sup.getElementNames())}
+
+            table = tables_sup.getByName(table_name)
+            rows = table.getRows().getCount()
+            cols = table.getColumns().getCount()
+            cell_names = table.getCellNames()
+
+            data = []
+            for r in range(rows):
+                row_data = []
+                for c in range(cols):
+                    # Cell naming: A1, B1, ... for row 1
+                    col_letter = chr(ord('A') + c) if c < 26 else f"A{chr(ord('A') + c - 26)}"
+                    cell_name = f"{col_letter}{r + 1}"
+                    try:
+                        cell = table.getCellByName(cell_name)
+                        row_data.append(cell.getString())
+                    except Exception:
+                        row_data.append("")
+                data.append(row_data)
+
+            return {"success": True, "table_name": table_name,
+                    "rows": rows, "cols": cols, "data": data}
+        except Exception as e:
+            logger.error(f"Failed to read table: {e}")
+            return {"success": False, "error": str(e)}
+
+    def write_table_cell(self, table_name: str, cell: str, value: str,
+                         file_path: str = None) -> Dict[str, Any]:
+        """Write to a cell in a Writer table (e.g. cell='B2')."""
+        try:
+            doc = self._resolve_document(file_path)
+            tables_sup = doc.getTextTables()
+
+            if not tables_sup.hasByName(table_name):
+                return {"success": False,
+                        "error": f"Table '{table_name}' not found"}
+
+            table = tables_sup.getByName(table_name)
+            cell_obj = table.getCellByName(cell)
+            if cell_obj is None:
+                return {"success": False,
+                        "error": f"Cell '{cell}' not found in {table_name}"}
+
+            # Try numeric first
+            try:
+                cell_obj.setValue(float(value))
+            except (ValueError, TypeError):
+                cell_obj.setString(value)
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True, "table": table_name,
+                    "cell": cell, "value": value}
+        except Exception as e:
+            logger.error(f"Failed to write table cell: {e}")
+            return {"success": False, "error": str(e)}
+
+    def create_table(self, rows: int, cols: int,
+                     paragraph_index: int = None,
+                     locator: str = None,
+                     file_path: str = None) -> Dict[str, Any]:
+        """Create a new table at a position."""
+        try:
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+            idx = 0
+            target = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if idx == paragraph_index:
+                    target = element
+                    break
+                idx += 1
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            table = doc.createInstance("com.sun.star.text.TextTable")
+            table.initialize(rows, cols)
+            cursor = doc_text.createTextCursorByRange(target.getEnd())
+            doc_text.insertTextContent(cursor, table, False)
+
+            table_name = table.getName()
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True, "table_name": table_name,
+                    "rows": rows, "cols": cols}
+        except Exception as e:
+            logger.error(f"Failed to create table: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Images
+    # ----------------------------------------------------------------
+
+    def list_images(self, file_path: str = None) -> Dict[str, Any]:
+        """List all images/graphic objects in the document."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not hasattr(doc, 'getGraphicObjects'):
+                return {"success": False,
+                        "error": "Document does not support graphic objects"}
+
+            graphics = doc.getGraphicObjects()
+            images = []
+            for name in graphics.getElementNames():
+                graphic = graphics.getByName(name)
+                entry = {"name": name}
+                try:
+                    entry["url"] = graphic.getPropertyValue("GraphicURL")
+                except Exception:
+                    pass
+                try:
+                    size = graphic.getPropertyValue("Size")
+                    entry["width_mm"] = size.Width // 100
+                    entry["height_mm"] = size.Height // 100
+                except Exception:
+                    try:
+                        entry["width_mm"] = graphic.Width // 100
+                        entry["height_mm"] = graphic.Height // 100
+                    except Exception:
+                        pass
+                try:
+                    entry["description"] = graphic.getPropertyValue(
+                        "Description")
+                    entry["title"] = graphic.getPropertyValue("Title")
+                except Exception:
+                    pass
+                images.append(entry)
+
+            return {"success": True, "images": images,
+                    "count": len(images)}
+        except Exception as e:
+            logger.error(f"Failed to list images: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_image_info(self, image_name: str,
+                       file_path: str = None) -> Dict[str, Any]:
+        """Get detailed info about a specific image."""
+        try:
+            doc = self._resolve_document(file_path)
+            graphics = doc.getGraphicObjects()
+
+            if not graphics.hasByName(image_name):
+                return {"success": False,
+                        "error": f"Image '{image_name}' not found",
+                        "available": list(graphics.getElementNames())}
+
+            graphic = graphics.getByName(image_name)
+            info = {"name": image_name, "success": True}
+
+            for prop in ("GraphicURL", "Description", "Title"):
+                try:
+                    info[prop] = graphic.getPropertyValue(prop)
+                except Exception:
+                    pass
+
+            # Enum properties — convert UNO enums to JSON-safe values
+            anchor_names = ["AT_PARAGRAPH", "AS_CHARACTER",
+                            "AT_PAGE", "AT_FRAME", "AT_CHARACTER"]
+            for prop in ("AnchorType", "HoriOrient", "VertOrient"):
+                try:
+                    val = graphic.getPropertyValue(prop)
+                    try:
+                        str_val = val.value  # UNO enum → string
+                    except AttributeError:
+                        str_val = str(val)
+                    info[prop] = str_val
+                    # For AnchorType, also add the integer
+                    if prop == "AnchorType" and str_val in anchor_names:
+                        info["anchor_type_id"] = anchor_names.index(str_val)
+                except Exception:
+                    pass
+
+            try:
+                size = graphic.getPropertyValue("Size")
+                info["width_mm"] = size.Width // 100
+                info["height_mm"] = size.Height // 100
+            except Exception:
+                try:
+                    info["width_mm"] = graphic.Width // 100
+                    info["height_mm"] = graphic.Height // 100
+                except Exception:
+                    pass
+
+            # Position in document
+            try:
+                anchor = graphic.getAnchor()
+                para_ranges = self._get_paragraph_ranges(doc)
+                info["paragraph_index"] = self._find_paragraph_for_range(
+                    anchor, para_ranges, doc.getText())
+            except Exception:
+                pass
+
+            return info
+        except Exception as e:
+            logger.error(f"Failed to get image info: {e}")
+            return {"success": False, "error": str(e)}
+
+    def set_image_properties(self, image_name: str,
+                             width_mm: int = None,
+                             height_mm: int = None,
+                             title: str = None,
+                             description: str = None,
+                             anchor_type: int = None,
+                             file_path: str = None) -> Dict[str, Any]:
+        """Resize, reposition, or update caption/alt-text for an image.
+
+        Args:
+            image_name: Name of the image/graphic object
+            width_mm: New width in mm (keeps aspect ratio if height omitted)
+            height_mm: New height in mm (keeps aspect ratio if width omitted)
+            title: Image title (caption)
+            description: Alt-text / description
+            anchor_type: 0=AT_PARAGRAPH, 1=AS_CHARACTER, 2=AT_PAGE,
+                         3=AT_FRAME, 4=AT_CHARACTER
+        """
+        try:
+            doc = self._resolve_document(file_path)
+            graphics = doc.getGraphicObjects()
+
+            if not graphics.hasByName(image_name):
+                return {"success": False,
+                        "error": f"Image '{image_name}' not found",
+                        "available": list(graphics.getElementNames())}
+
+            graphic = graphics.getByName(image_name)
+            changed = []
+
+            # Resize
+            if width_mm is not None or height_mm is not None:
+                try:
+                    size = graphic.getPropertyValue("Size")
+                except Exception:
+                    from com.sun.star.awt import Size as AwtSize
+                    size = AwtSize(graphic.Width, graphic.Height)
+
+                cur_w = size.Width   # in 1/100 mm
+                cur_h = size.Height
+
+                if width_mm is not None and height_mm is not None:
+                    size.Width = width_mm * 100
+                    size.Height = height_mm * 100
+                elif width_mm is not None:
+                    ratio = (width_mm * 100) / cur_w if cur_w else 1
+                    size.Width = width_mm * 100
+                    size.Height = int(cur_h * ratio)
+                else:
+                    ratio = (height_mm * 100) / cur_h if cur_h else 1
+                    size.Height = height_mm * 100
+                    size.Width = int(cur_w * ratio)
+
+                graphic.setPropertyValue("Size", size)
+                changed.append(f"size={size.Width//100}x{size.Height//100}mm")
+
+            if title is not None:
+                graphic.setPropertyValue("Title", title)
+                changed.append(f"title={title}")
+
+            if description is not None:
+                graphic.setPropertyValue("Description", description)
+                changed.append(f"description set")
+
+            if anchor_type is not None:
+                graphic.setPropertyValue("AnchorType", anchor_type)
+                labels = {0: "AT_PARAGRAPH", 1: "AS_CHARACTER",
+                          2: "AT_PAGE", 3: "AT_FRAME", 4: "AT_CHARACTER"}
+                changed.append(f"anchor={labels.get(anchor_type, anchor_type)}")
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True, "image": image_name,
+                    "changes": changed}
+        except Exception as e:
+            logger.error(f"Failed to set image properties: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Recent Documents
+    # ----------------------------------------------------------------
+
+    def get_recent_documents(self, max_count: int = 20) -> Dict[str, Any]:
+        """Get the list of recently opened documents from LO history."""
+        try:
+            cfg_provider = self.smgr.createInstanceWithContext(
+                "com.sun.star.configuration.ConfigurationProvider",
+                self.ctx)
+
+            import urllib.parse
+
+            # Try multiple known config paths
+            paths_to_try = [
+                "/org.openoffice.Office.Histories/Histories/PickList/ItemList",
+                "/org.openoffice.Office.Histories/Histories/PickList",
+                "/org.openoffice.Office.Common/History/PickList",
+            ]
+
+            for node_path in paths_to_try:
+                try:
+                    prop = PropertyValue()
+                    prop.Name = "nodepath"
+                    prop.Value = node_path
+
+                    access = cfg_provider.createInstanceWithArguments(
+                        "com.sun.star.configuration.ConfigurationAccess",
+                        (prop,))
+
+                    items = access.getElementNames()
+                    if not items:
+                        continue
+
+                    docs = []
+                    for i, name in enumerate(items):
+                        if i >= max_count:
+                            break
+                        try:
+                            url = name
+                            item = access.getByName(name)
+
+                            title = ""
+                            try:
+                                title = item.getByName("Title")
+                            except Exception:
+                                try:
+                                    title = item.getPropertyValue("Title")
+                                except Exception:
+                                    pass
+
+                            path = url
+                            if url.startswith("file:///"):
+                                path = urllib.parse.unquote(
+                                    url[8:]).replace("/", "\\")
+
+                            entry = {"url": url, "path": path}
+                            if title:
+                                entry["title"] = title
+                            docs.append(entry)
+                        except Exception:
+                            # name might be the URL directly (leaf node)
+                            path = name
+                            if name.startswith("file:///"):
+                                path = urllib.parse.unquote(
+                                    name[8:]).replace("/", "\\")
+                            docs.append({"url": name, "path": path})
+
+                    if docs:
+                        return {"success": True, "documents": docs,
+                                "count": len(docs),
+                                "config_path": node_path}
+                except Exception:
+                    continue
+
+            return {"success": True, "documents": [],
+                    "count": 0,
+                    "note": "No recent documents found in any config path"}
+        except Exception as e:
+            logger.error(f"Failed to get recent documents: {e}")
+            return {"success": False, "error": str(e)}
 
     # ----------------------------------------------------------------
     # Structural navigation
@@ -1175,6 +2181,664 @@ class UNOBridge:
             return {"success": False, "error": str(e)}
 
     # ----------------------------------------------------------------
+    # Calc tools
+    # ----------------------------------------------------------------
+
+    def _parse_cell_address(self, addr: str):
+        """Parse 'A1' or 'Sheet1.A1' -> (sheet_name_or_None, col, row)."""
+        sheet_name = None
+        if '.' in addr:
+            sheet_name, addr = addr.split('.', 1)
+        # Parse column letters + row number
+        col_str = ""
+        row_str = ""
+        for ch in addr:
+            if ch.isalpha():
+                col_str += ch
+            else:
+                row_str += ch
+        col = 0
+        for ch in col_str.upper():
+            col = col * 26 + (ord(ch) - ord('A') + 1)
+        col -= 1  # 0-based
+        row = int(row_str) - 1  # 0-based
+        return sheet_name, col, row
+
+    def _get_calc_sheet(self, doc, sheet_name: str = None):
+        """Get a sheet by name or the active sheet."""
+        sheets = doc.getSheets()
+        if sheet_name:
+            if not sheets.hasByName(sheet_name):
+                raise ValueError(f"Sheet '{sheet_name}' not found. "
+                                 f"Available: {list(sheets.getElementNames())}")
+            return sheets.getByName(sheet_name)
+        # Use active sheet
+        controller = doc.getCurrentController()
+        if controller:
+            return controller.getActiveSheet()
+        return sheets.getByIndex(0)
+
+    def read_cells(self, range_str: str,
+                   file_path: str = None) -> Dict[str, Any]:
+        """Read cell values from a range (e.g. 'A1:D10' or 'Sheet1.A1:D10')."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_calc(doc):
+                return {"success": False, "error": "Not a Calc document"}
+
+            # Parse range
+            if ':' in range_str:
+                start_addr, end_addr = range_str.split(':', 1)
+            else:
+                start_addr = end_addr = range_str
+
+            s_sheet, s_col, s_row = self._parse_cell_address(start_addr)
+            e_sheet, e_col, e_row = self._parse_cell_address(end_addr)
+            sheet_name = s_sheet or e_sheet
+            sheet = self._get_calc_sheet(doc, sheet_name)
+
+            cell_range = sheet.getCellRangeByPosition(
+                s_col, s_row, e_col, e_row)
+            data = cell_range.getDataArray()
+
+            # Convert to list of lists (tuples -> lists)
+            rows = [list(row) for row in data]
+
+            return {
+                "success": True,
+                "range": range_str,
+                "sheet": sheet.getName(),
+                "data": rows,
+                "row_count": len(rows),
+                "col_count": len(rows[0]) if rows else 0,
+            }
+        except Exception as e:
+            logger.error(f"Failed to read cells: {e}")
+            return {"success": False, "error": str(e)}
+
+    def write_cell(self, cell: str, value: str,
+                   file_path: str = None) -> Dict[str, Any]:
+        """Write a value to a cell (e.g. 'B3' or 'Sheet1.B3')."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_calc(doc):
+                return {"success": False, "error": "Not a Calc document"}
+
+            sheet_name, col, row = self._parse_cell_address(cell)
+            sheet = self._get_calc_sheet(doc, sheet_name)
+            cell_obj = sheet.getCellByPosition(col, row)
+
+            # Try to set as number first, fall back to string
+            try:
+                num_val = float(value)
+                cell_obj.setValue(num_val)
+            except ValueError:
+                cell_obj.setString(value)
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {
+                "success": True,
+                "cell": cell,
+                "sheet": sheet.getName(),
+                "value": value,
+            }
+        except Exception as e:
+            logger.error(f"Failed to write cell: {e}")
+            return {"success": False, "error": str(e)}
+
+    def list_sheets(self, file_path: str = None) -> Dict[str, Any]:
+        """List all sheets with names and basic info."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_calc(doc):
+                return {"success": False, "error": "Not a Calc document"}
+
+            sheets_obj = doc.getSheets()
+            count = sheets_obj.getCount()
+            sheets = []
+            for i in range(count):
+                sheet = sheets_obj.getByIndex(i)
+                sheets.append({
+                    "index": i,
+                    "name": sheet.getName(),
+                    "is_visible": sheet.IsVisible if hasattr(sheet, 'IsVisible') else True,
+                })
+            return {"success": True, "sheets": sheets, "count": count}
+        except Exception as e:
+            logger.error(f"Failed to list sheets: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_sheet_info(self, sheet_name: str = None,
+                       file_path: str = None) -> Dict[str, Any]:
+        """Get info about a sheet: used range, row/col count."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_calc(doc):
+                return {"success": False, "error": "Not a Calc document"}
+
+            sheet = self._get_calc_sheet(doc, sheet_name)
+
+            # Use cursor to find used area extent
+            cursor = sheet.createCursor()
+            cursor.gotoStartOfUsedArea(False)
+            cursor.gotoEndOfUsedArea(True)
+
+            range_addr = cursor.getRangeAddress()
+            used_rows = range_addr.EndRow - range_addr.StartRow + 1
+            used_cols = range_addr.EndColumn - range_addr.StartColumn + 1
+
+            return {
+                "success": True,
+                "sheet_name": sheet.getName(),
+                "used_rows": used_rows,
+                "used_cols": used_cols,
+                "start_row": range_addr.StartRow,
+                "start_col": range_addr.StartColumn,
+                "end_row": range_addr.EndRow,
+                "end_col": range_addr.EndColumn,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get sheet info: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Impress tools
+    # ----------------------------------------------------------------
+
+    def list_slides(self, file_path: str = None) -> Dict[str, Any]:
+        """List slides: count, titles, layout names."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_impress(doc):
+                return {"success": False,
+                        "error": "Not an Impress document"}
+
+            pages = doc.getDrawPages()
+            count = pages.getCount()
+            slides = []
+            for i in range(count):
+                page = pages.getByIndex(i)
+                name = page.Name if hasattr(page, 'Name') else f"Slide {i+1}"
+                layout = ""
+                try:
+                    layout = str(page.Layout)
+                except Exception:
+                    pass
+                # Try to get title from first shape
+                title = ""
+                for s in range(page.getCount()):
+                    shape = page.getByIndex(s)
+                    if hasattr(shape, 'getString'):
+                        txt = shape.getString().strip()
+                        if txt:
+                            title = txt[:100]
+                            break
+                slides.append({
+                    "index": i,
+                    "name": name,
+                    "layout": layout,
+                    "title": title,
+                })
+            return {"success": True, "slides": slides, "count": count}
+        except Exception as e:
+            logger.error(f"Failed to list slides: {e}")
+            return {"success": False, "error": str(e)}
+
+    def read_slide_text(self, slide_index: int,
+                        file_path: str = None) -> Dict[str, Any]:
+        """Get all text from a slide + notes page."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_impress(doc):
+                return {"success": False,
+                        "error": "Not an Impress document"}
+
+            pages = doc.getDrawPages()
+            if slide_index < 0 or slide_index >= pages.getCount():
+                return {"success": False,
+                        "error": f"Slide index {slide_index} out of range "
+                                 f"(0..{pages.getCount()-1})"}
+
+            page = pages.getByIndex(slide_index)
+
+            # Collect text from all shapes
+            texts = []
+            for s in range(page.getCount()):
+                shape = page.getByIndex(s)
+                if hasattr(shape, 'getString'):
+                    txt = shape.getString()
+                    if txt.strip():
+                        texts.append(txt)
+
+            # Notes page
+            notes_text = ""
+            try:
+                notes_page = page.getNotesPage()
+                for s in range(notes_page.getCount()):
+                    shape = notes_page.getByIndex(s)
+                    if hasattr(shape, 'getString'):
+                        txt = shape.getString().strip()
+                        if txt:
+                            notes_text += txt + "\n"
+            except Exception:
+                pass
+
+            return {
+                "success": True,
+                "slide_index": slide_index,
+                "name": page.Name if hasattr(page, 'Name') else "",
+                "texts": texts,
+                "notes": notes_text.strip(),
+            }
+        except Exception as e:
+            logger.error(f"Failed to read slide text: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_presentation_info(self,
+                              file_path: str = None) -> Dict[str, Any]:
+        """Slide count, dimensions, master page names."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not self._is_impress(doc):
+                return {"success": False,
+                        "error": "Not an Impress document"}
+
+            pages = doc.getDrawPages()
+            slide_count = pages.getCount()
+
+            # Dimensions from first slide
+            width = height = 0
+            if slide_count > 0:
+                first = pages.getByIndex(0)
+                width = first.Width
+                height = first.Height
+
+            # Master pages
+            masters = doc.getMasterPages()
+            master_names = []
+            for i in range(masters.getCount()):
+                mp = masters.getByIndex(i)
+                master_names.append(mp.Name if hasattr(mp, 'Name') else f"Master {i+1}")
+
+            return {
+                "success": True,
+                "slide_count": slide_count,
+                "width": width,
+                "height": height,
+                "master_pages": master_names,
+            }
+        except Exception as e:
+            logger.error(f"Failed to get presentation info: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
+    # Document maintenance
+    # ----------------------------------------------------------------
+
+    def refresh_indexes(self, file_path: str = None) -> Dict[str, Any]:
+        """Refresh all document indexes (TOC, alphabetical, etc.)."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not hasattr(doc, 'getDocumentIndexes'):
+                return {"success": False,
+                        "error": "Document does not support indexes"}
+
+            indexes = doc.getDocumentIndexes()
+            count = indexes.getCount()
+            refreshed = []
+            for i in range(count):
+                idx = indexes.getByIndex(i)
+                idx.update()
+                name = idx.getName() if hasattr(idx, 'getName') else f"index_{i}"
+                refreshed.append(name)
+
+            if count > 0 and doc.hasLocation():
+                doc.store()
+
+            return {"success": True, "refreshed": refreshed,
+                    "count": count}
+        except Exception as e:
+            logger.error(f"Failed to refresh indexes: {e}")
+            return {"success": False, "error": str(e)}
+
+    def update_fields(self, file_path: str = None) -> Dict[str, Any]:
+        """Refresh all text fields (dates, page numbers, cross-refs)."""
+        try:
+            doc = self._resolve_document(file_path)
+            if not hasattr(doc, 'getTextFields'):
+                return {"success": False,
+                        "error": "Document does not support text fields"}
+
+            fields = doc.getTextFields()
+            fields.refresh()
+
+            # Count fields
+            enum = fields.createEnumeration()
+            count = 0
+            while enum.hasMoreElements():
+                enum.nextElement()
+                count += 1
+
+            return {"success": True, "fields_refreshed": count}
+        except Exception as e:
+            logger.error(f"Failed to update fields: {e}")
+            return {"success": False, "error": str(e)}
+
+    def delete_paragraph(self, paragraph_index: int = None,
+                         locator: str = None,
+                         file_path: str = None) -> Dict[str, Any]:
+        """Delete a paragraph by index or locator."""
+        try:
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+            idx = 0
+            target = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if idx == paragraph_index:
+                    target = element
+                    break
+                idx += 1
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            # Select the paragraph + its trailing break and delete
+            cursor = doc_text.createTextCursorByRange(target)
+            # Extend to include the paragraph break
+            cursor.gotoStartOfParagraph(False)
+            cursor.gotoEndOfParagraph(True)
+            # If not the last paragraph, also grab the break after it
+            if enum.hasMoreElements():
+                cursor.goRight(1, True)
+            doc_text.setString("") if False else None  # no-op
+            cursor.setString("")
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True,
+                    "message": f"Deleted paragraph {paragraph_index}"}
+        except Exception as e:
+            logger.error(f"Failed to delete paragraph: {e}")
+            return {"success": False, "error": str(e)}
+
+    def set_paragraph_text(self, paragraph_index: int = None,
+                           text: str = "",
+                           locator: str = None,
+                           file_path: str = None) -> Dict[str, Any]:
+        """Replace the entire text content of a paragraph (preserves style)."""
+        try:
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+            idx = 0
+            target = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if idx == paragraph_index:
+                    target = element
+                    break
+                idx += 1
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            old_text = target.getString()
+            target.setString(text)
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True,
+                    "paragraph_index": paragraph_index,
+                    "old_length": len(old_text),
+                    "new_length": len(text)}
+        except Exception as e:
+            logger.error(f"Failed to set paragraph text: {e}")
+            return {"success": False, "error": str(e)}
+
+    def get_document_properties(self,
+                                file_path: str = None) -> Dict[str, Any]:
+        """Read document metadata (title, author, subject, keywords, etc.)."""
+        try:
+            doc = self._resolve_document(file_path)
+            props = doc.getDocumentProperties()
+
+            result = {
+                "success": True,
+                "title": props.Title,
+                "author": props.Author,
+                "subject": props.Subject,
+                "description": props.Description,
+                "keywords": list(props.Keywords) if props.Keywords else [],
+                "generator": props.Generator,
+            }
+
+            # Creation/modification dates
+            try:
+                cd = props.CreationDate
+                result["creation_date"] = (
+                    f"{cd.Year:04d}-{cd.Month:02d}-{cd.Day:02d}")
+            except Exception:
+                pass
+            try:
+                md = props.ModificationDate
+                result["modification_date"] = (
+                    f"{md.Year:04d}-{md.Month:02d}-{md.Day:02d}")
+            except Exception:
+                pass
+
+            # Custom properties
+            try:
+                user_props = props.getUserDefinedProperties()
+                info = user_props.getPropertySetInfo()
+                custom = {}
+                for prop in info.getProperties():
+                    try:
+                        custom[prop.Name] = str(
+                            user_props.getPropertyValue(prop.Name))
+                    except Exception:
+                        pass
+                if custom:
+                    result["custom_properties"] = custom
+            except Exception:
+                pass
+
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get document properties: {e}")
+            return {"success": False, "error": str(e)}
+
+    def set_document_properties(self, title: str = None,
+                                author: str = None,
+                                subject: str = None,
+                                description: str = None,
+                                keywords: list = None,
+                                file_path: str = None) -> Dict[str, Any]:
+        """Update document metadata."""
+        try:
+            doc = self._resolve_document(file_path)
+            props = doc.getDocumentProperties()
+            updated = []
+
+            if title is not None:
+                props.Title = title
+                updated.append("title")
+            if author is not None:
+                props.Author = author
+                updated.append("author")
+            if subject is not None:
+                props.Subject = subject
+                updated.append("subject")
+            if description is not None:
+                props.Description = description
+                updated.append("description")
+            if keywords is not None:
+                props.Keywords = tuple(keywords)
+                updated.append("keywords")
+
+            if updated and doc.hasLocation():
+                doc.store()
+
+            return {"success": True, "updated_fields": updated}
+        except Exception as e:
+            logger.error(f"Failed to set document properties: {e}")
+            return {"success": False, "error": str(e)}
+
+    def set_paragraph_style(self, style_name: str,
+                            paragraph_index: int = None,
+                            locator: str = None,
+                            file_path: str = None) -> Dict[str, Any]:
+        """Set the paragraph style (e.g. 'Heading 1', 'Text Body', 'List Bullet')."""
+        try:
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+            idx = 0
+            target = None
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if idx == paragraph_index:
+                    target = element
+                    break
+                idx += 1
+
+            if target is None:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            old_style = target.getPropertyValue("ParaStyleName")
+            target.setPropertyValue("ParaStyleName", style_name)
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True,
+                    "paragraph_index": paragraph_index,
+                    "old_style": old_style,
+                    "new_style": style_name}
+        except Exception as e:
+            logger.error(f"Failed to set paragraph style: {e}")
+            return {"success": False, "error": str(e)}
+
+    def duplicate_paragraph(self, paragraph_index: int = None,
+                            locator: str = None,
+                            count: int = 1,
+                            file_path: str = None) -> Dict[str, Any]:
+        """Duplicate a paragraph (with its style) after itself.
+
+        If count > 1, duplicates the paragraph and the next (count-1)
+        paragraphs as a block (useful for heading + body).
+        """
+        try:
+            doc = self._resolve_document(file_path)
+
+            if locator is not None and paragraph_index is None:
+                resolved = self._resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            doc_text = doc.getText()
+            enum = doc_text.createEnumeration()
+
+            # Collect target paragraphs
+            paragraphs = []
+            idx = 0
+            while enum.hasMoreElements():
+                element = enum.nextElement()
+                if paragraph_index <= idx < paragraph_index + count:
+                    if element.supportsService("com.sun.star.text.Paragraph"):
+                        paragraphs.append({
+                            "text": element.getString(),
+                            "style": element.getPropertyValue("ParaStyleName"),
+                        })
+                    else:
+                        paragraphs.append({
+                            "text": "[table]",
+                            "style": "",
+                            "is_table": True,
+                        })
+                if idx >= paragraph_index + count - 1:
+                    # Remember the last element to insert after
+                    last_element = element
+                    break
+                idx += 1
+
+            if not paragraphs:
+                return {"success": False,
+                        "error": f"Paragraph {paragraph_index} not found"}
+
+            # Insert duplicates after the last collected paragraph
+            cursor = doc_text.createTextCursorByRange(last_element)
+            cursor.gotoEndOfParagraph(False)
+
+            for para in paragraphs:
+                if para.get("is_table"):
+                    continue  # skip tables in duplication
+                doc_text.insertControlCharacter(
+                    cursor, PARAGRAPH_BREAK, False)
+                doc_text.insertString(cursor, para["text"], False)
+                if para["style"]:
+                    cursor.setPropertyValue("ParaStyleName", para["style"])
+
+            if doc.hasLocation():
+                doc.store()
+
+            return {"success": True,
+                    "duplicated_from": paragraph_index,
+                    "paragraphs_duplicated": len(paragraphs)}
+        except Exception as e:
+            logger.error(f"Failed to duplicate paragraph: {e}")
+            return {"success": False, "error": str(e)}
+
+    def save_document_as(self, target_path: str,
+                         file_path: str = None) -> Dict[str, Any]:
+        """Save/duplicate a document under a new name."""
+        try:
+            doc = self._resolve_document(file_path)
+            url = uno.systemPathToFileUrl(target_path)
+            doc.storeToURL(url, ())
+            logger.info(f"Saved document as {target_path}")
+            return {"success": True,
+                    "message": f"Document saved as {target_path}",
+                    "path": target_path}
+        except Exception as e:
+            logger.error(f"Failed to save document as: {e}")
+            return {"success": False, "error": str(e)}
+
+    # ----------------------------------------------------------------
     # Original methods
     # ----------------------------------------------------------------
 
@@ -1196,11 +2860,11 @@ class UNOBridge:
             }
             
             # Add document-specific information
-            if isinstance(doc, XTextDocument):
+            if self._is_writer(doc):
                 text = doc.getText()
                 info["word_count"] = len(text.getString().split())
                 info["character_count"] = len(text.getString())
-            elif isinstance(doc, XSpreadsheetDocument):
+            elif self._is_calc(doc):
                 sheets = doc.getSheets()
                 info["sheet_count"] = sheets.getCount()
                 info["sheet_names"] = [sheets.getByIndex(i).getName() 
@@ -1232,7 +2896,7 @@ class UNOBridge:
                 return {"success": False, "error": "No active document"}
             
             # Handle Writer documents
-            if isinstance(doc, XTextDocument):
+            if self._is_writer(doc):
                 text_obj = doc.getText()
                 
                 if position is None:
@@ -1271,7 +2935,7 @@ class UNOBridge:
             if doc is None:
                 doc = self.get_active_document()
             
-            if not doc or not isinstance(doc, XTextDocument):
+            if not doc or not self._is_writer(doc):
                 return {"success": False, "error": "No Writer document available"}
             
             # Get current selection
@@ -1402,7 +3066,7 @@ class UNOBridge:
             if not doc:
                 return {"success": False, "error": "No document available"}
             
-            if isinstance(doc, XTextDocument):
+            if self._is_writer(doc):
                 text = doc.getText().getString()
                 return {"success": True, "content": text, "length": len(text)}
             else:
@@ -1412,16 +3076,30 @@ class UNOBridge:
             logger.error(f"Failed to get text content: {e}")
             return {"success": False, "error": str(e)}
     
+    def _is_writer(self, doc: Any) -> bool:
+        return hasattr(doc, 'supportsService') and doc.supportsService(
+            "com.sun.star.text.TextDocument")
+
+    def _is_calc(self, doc: Any) -> bool:
+        return hasattr(doc, 'supportsService') and doc.supportsService(
+            "com.sun.star.sheet.SpreadsheetDocument")
+
+    def _is_impress(self, doc: Any) -> bool:
+        return hasattr(doc, 'supportsService') and doc.supportsService(
+            "com.sun.star.presentation.PresentationDocument")
+
     def _get_document_type(self, doc: Any) -> str:
         """Determine document type"""
-        if isinstance(doc, XTextDocument):
-            return "writer"
-        elif isinstance(doc, XSpreadsheetDocument):
-            return "calc"
-        elif XPresentationDocument is not None and isinstance(doc, XPresentationDocument):
-            return "impress"
-        else:
-            return "unknown"
+        if hasattr(doc, 'supportsService'):
+            if doc.supportsService("com.sun.star.text.TextDocument"):
+                return "writer"
+            if doc.supportsService("com.sun.star.sheet.SpreadsheetDocument"):
+                return "calc"
+            if doc.supportsService("com.sun.star.presentation.PresentationDocument"):
+                return "impress"
+            if doc.supportsService("com.sun.star.drawing.DrawingDocument"):
+                return "draw"
+        return "unknown"
     
     def _has_selection(self, doc: Any) -> bool:
         """Check if document has selected content"""

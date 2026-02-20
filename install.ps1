@@ -7,24 +7,26 @@
     Installs all dependencies (Python 3.12+, LibreOffice, UV, optionally Node.js & Java),
     configures PATH, syncs Python packages, and generates Claude Desktop config.
 
+    With -Plugin: builds and installs the LibreOffice extension (.oxt).
+
     Uses winget (built into Windows 10/11) - no need for Chocolatey.
 
 .EXAMPLE
-    # Run from PowerShell (admin recommended for winget installs):
-    .\setup-windows.ps1
-
-    # Skip optional dependencies:
-    .\setup-windows.ps1 -SkipOptional
-
-    # Only check status, don't install anything:
-    .\setup-windows.ps1 -CheckOnly
+    .\install.ps1                  # Full environment setup
+    .\install.ps1 -SkipOptional    # Skip optional dependencies
+    .\install.ps1 -CheckOnly       # Only check status, don't install
+    .\install.ps1 -Plugin          # Build + install LibreOffice extension
+    .\install.ps1 -Plugin -Force   # Build + install (no prompts, kills LO)
+    .\install.ps1 -BuildOnly       # Only build the .oxt, don't install
 #>
 
 [CmdletBinding()]
 param(
     [switch]$SkipOptional,
     [switch]$CheckOnly,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Plugin,
+    [switch]$BuildOnly
 )
 
 Set-StrictMode -Version Latest
@@ -596,6 +598,20 @@ function Test-Setup {
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 function Main {
+    # ── Plugin mode: delegate to scripts/install-plugin.ps1 ──────────────
+    if ($Plugin -or $BuildOnly) {
+        $pluginScript = Join-Path $Script:ProjectRoot "scripts\install-plugin.ps1"
+        if (-not (Test-Path $pluginScript)) {
+            Write-Err "scripts\install-plugin.ps1 not found"
+            exit 1
+        }
+        $pluginArgs = @()
+        if ($BuildOnly) { $pluginArgs += "-BuildOnly" }
+        if ($Force)     { $pluginArgs += "-Force" }
+        & $pluginScript @pluginArgs
+        return
+    }
+
     Write-Header "mcp-libre Windows Setup"
 
     if (-not (Test-IsAdmin)) {

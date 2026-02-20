@@ -19,7 +19,7 @@
                     <value>org.mcp.libreoffice:get_status</value>
                 </prop>
                 <prop oor:name="ImageIdentifier" oor:type="xs:string">
-                    <value/>
+                    <value>%origin%/icons/stopped_16</value>
                 </prop>
 
                 <node oor:name="Submenu">
@@ -36,7 +36,7 @@
                             <value>_self</value>
                         </prop>
                         <prop oor:name="ImageIdentifier" oor:type="xs:string">
-                            <value/>
+                            <value>%origin%/icons/stopped_16</value>
                         </prop>
                     </node>
 

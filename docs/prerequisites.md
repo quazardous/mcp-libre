@@ -62,7 +62,7 @@ brew install node openjdk
 
 ```powershell
 # Automatic (recommended):
-.\setup-windows.ps1
+.\install.ps1
 
 # Or manually via winget:
 winget install Python.Python.3.12

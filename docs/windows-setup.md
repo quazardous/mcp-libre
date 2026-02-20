@@ -7,7 +7,7 @@ Installation and usage guide for mcp-libre on Windows.
 ```powershell
 # From PowerShell (admin recommended for winget installs)
 cd mcp-libre
-.\setup-windows.ps1
+.\install.ps1
 ```
 
 The script handles everything automatically:
@@ -27,10 +27,10 @@ The script handles everything automatically:
 
 ```powershell
 # Dry run — see what's missing
-.\setup-windows.ps1 -CheckOnly
+.\install.ps1 -CheckOnly
 
 # Install without Node.js or Java
-.\setup-windows.ps1 -SkipOptional
+.\install.ps1 -SkipOptional
 ```
 
 ## Manual Installation
@@ -95,7 +95,7 @@ winget install EclipseAdoptium.Temurin.21.JRE  # For advanced LibreOffice featur
 
 ## Claude Desktop Configuration
 
-The `setup-windows.ps1` script generates this automatically.
+The `install.ps1` script generates this automatically.
 
 To configure manually, create/edit `%APPDATA%\Claude\claude_desktop_config.json`:
 

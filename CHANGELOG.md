@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.3.0] - 2026-02-20
+
+### Added
+- **Main thread executor**: all UNO calls run on LO main thread via `AsyncCallback` — fixes black menus and crashes on large docs
+- **59 tools** registered in plugin (was 24)
+- Comments & review: `list_comments`, `add_comment`, `resolve_comment`, `delete_comment`
+- Track changes: `set_track_changes`, `get_tracked_changes`, `accept_all_changes`, `reject_all_changes`
+- Styles: `list_styles`, `get_style_info`
+- Writer tables: `list_tables`, `read_table`, `write_table_cell`, `create_table`
+- Images: `list_images`, `get_image_info`, `set_image_properties` (resize, anchor, title/alt-text)
+- Paragraph editing: `set_paragraph_text`, `delete_paragraph`, `duplicate_paragraph`, `set_paragraph_style`
+- Document management: `save_document`, `save_document_copy`, `refresh_indexes`, `update_fields`, `get_document_properties`, `set_document_properties`
+- Document protection: `set_document_protection` (UI lock via ProtectForm, UNO passes through)
+- Recent documents: `get_recent_documents` (reads LO history)
+- `list_open_documents`, `open_document` tools
+- `AGENT.md` — agent guide with workflow, anti-patterns, tool reference
+- `DEVEL.md` — developer guide with architecture, scripts, env vars, pitfalls
+
+### Changed
+- Renamed `setup-windows.ps1` → `install.ps1` with `-Plugin` and `-BuildOnly` flags
+- Moved all helper scripts to `scripts/` directory
+- Restructured `src/` into `server.py`, `plugin.py`, `backends/`, `tools/` (was single `libremcp.py`)
+- Plugin version read from `version.py` (single source of truth)
+
+### Fixed
+- UNO enum serialization in `get_image_info` (AnchorType, HoriOrient, VertOrient)
+- Recent documents config path (`/org.openoffice.Office.Histories/Histories/PickList/ItemList`)
+- `$PSScriptRoot` resolution in scripts moved to `scripts/` subdirectory
+
 ## [1.2.0] - 2026-02-20
 
 ### Added

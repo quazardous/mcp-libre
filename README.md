@@ -23,7 +23,7 @@ cd mcp-libre
 uv sync
 ```
 
-Windows: `.\setup-windows.ps1` installs everything automatically. See [docs/windows-setup.md](docs/windows-setup.md).
+Windows: `.\install.ps1` installs everything automatically. See [docs/windows-setup.md](docs/windows-setup.md).
 
 ## Modes
 
@@ -53,13 +53,13 @@ The extension embeds an HTTP API server inside LibreOffice (port 8765) with dire
 ### Install (Windows)
 
 ```powershell
-.\install-plugin.ps1        # build .oxt and install via unopkg
+.\install.ps1 -Plugin        # build .oxt and install via unopkg
 ```
 
 ### Dev workflow (Windows)
 
 ```powershell
-.\dev-deploy.ps1             # sync plugin/ to build/dev/ + junction in LO extensions
+.\scripts\dev-deploy.ps1     # sync plugin/ to build/dev/ + junction in LO extensions
 # Then restart LibreOffice
 ```
 
@@ -168,6 +168,10 @@ Add a `.mcp.json` at the project root:
 - [Troubleshooting](docs/troubleshooting.md)
 - [Live Viewing](docs/live-viewing.md)
 - [Changelog](CHANGELOG.md)
+
+## Copyright
+
+This project is a major fork of [patrup/mcp-libre](https://github.com/patrup/mcp-libre), which provided the initial MCP server and headless LibreOffice integration. The current version has been extensively rewritten: embedded LibreOffice extension with UNO bridge, main-thread execution via AsyncCallback, context-efficient document navigation (heading tree, locators, bookmarks), comments/review workflow, track changes, styles, tables, images, document protection, and 59+ tools.
 
 ## License
 

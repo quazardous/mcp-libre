@@ -30,7 +30,7 @@ $global:LASTEXITCODE = 0
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 
-$ProjectRoot = $PSScriptRoot
+$ProjectRoot = Split-Path $PSScriptRoot
 $PluginDir   = Join-Path $ProjectRoot "plugin"
 $BuildDir    = Join-Path $ProjectRoot "build"
 $StagingDir  = Join-Path $BuildDir "staging"
@@ -318,6 +318,7 @@ function Build-Oxt {
         "pythonpath\uno_bridge.py",
         "pythonpath\mcp_server.py",
         "pythonpath\ai_interface.py",
+        "pythonpath\version.py",
         "Addons.xcu",
         "ProtocolHandler.xcu",
         "MCPServerConfig.xcs",
@@ -347,7 +348,7 @@ function Build-Oxt {
     $stagePy = Join-Path $StagingDir "pythonpath"
     New-Item -ItemType Directory -Path $stagePy -Force | Out-Null
 
-    foreach ($f in @("uno_bridge.py", "mcp_server.py", "ai_interface.py")) {
+    foreach ($f in @("uno_bridge.py", "mcp_server.py", "ai_interface.py", "version.py")) {
         Copy-Item (Join-Path $PluginDir "pythonpath\$f") $stagePy
     }
 
@@ -565,7 +566,7 @@ function Main {
     # Find LibreOffice
     $loDir = Find-LibreOffice
     if (-not $loDir) {
-        Write-Err "LibreOffice not found. Install it first (.\setup-windows.ps1)"
+        Write-Err "LibreOffice not found. Install it first (.\install.ps1)"
         exit 1
     }
     Write-OK "LibreOffice: $loDir"

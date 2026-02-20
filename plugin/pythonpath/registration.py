@@ -16,6 +16,7 @@ import subprocess as _subprocess
 
 from com.sun.star.frame import XDispatch, XDispatchProvider
 from com.sun.star.lang import XServiceInfo, XInitialization
+from com.sun.star.task import XJob
 from com.sun.star.beans import PropertyValue
 
 # ── File logger (so we can debug even when LO console is hidden) ─────────────
@@ -33,9 +34,10 @@ logger = logging.getLogger("mcp-extension")
 IMPLEMENTATION_NAME = "org.mcp.libreoffice.MCPExtension"
 SERVICE_NAMES = ("com.sun.star.frame.ProtocolHandler",)
 
+from .version import EXTENSION_VERSION
+
 EXTENSION_NAME = "LibreOffice MCP Server"
-EXTENSION_VERSION = "1.1.3"
-EXTENSION_URL = "https://github.com/danja/mcp-libre"
+EXTENSION_URL = "https://github.com/quazardous/mcp-libre"
 
 logger.info("=== registration.py loaded — %s v%s ===", EXTENSION_NAME, EXTENSION_VERSION)
 
@@ -236,8 +238,6 @@ _mcp_state = {
 }
 
 # Cross-load guard: prevent two module loads from both auto-starting
-_autostart_lock = threading.Lock()
-_autostart_done = False
 
 # ── Server state & dynamic menu icons ─────────────────────────────────────
 
@@ -285,7 +285,9 @@ def _load_icon_graphic(icon_filename):
     """Load a PNG icon from the extension as XGraphic."""
     try:
         ext_url = _get_extension_url()
+        logger.debug(f"Extension URL: {ext_url}")
         if not ext_url:
+            logger.warning("Extension URL is None — icons won't load")
             return None
         ctx = uno.getComponentContext()
         smgr = ctx.ServiceManager
@@ -293,8 +295,12 @@ def _load_icon_graphic(icon_filename):
             "com.sun.star.graphic.GraphicProvider", ctx)
         pv = PropertyValue()
         pv.Name = "URL"
-        pv.Value = ext_url + "/icons/" + icon_filename
-        return gp.queryGraphic((pv,))
+        icon_url = ext_url + "/icons/" + icon_filename
+        pv.Value = icon_url
+        logger.debug(f"Loading icon: {icon_url}")
+        result = gp.queryGraphic((pv,))
+        logger.debug(f"Icon loaded: {result is not None}")
+        return result
     except Exception as e:
         logger.debug(f"Failed to load icon {icon_filename}: {e}")
         return None
@@ -316,6 +322,7 @@ _MODULE_IDS = (
 
 def _update_menu_icons():
     """Push the current-state icon into every module's ImageManager."""
+    return  # DISABLED: suspected cause of black menu rendering
     try:
         prefix = _icon_name_for_state()
         graphic = _load_icon_graphic(f"{prefix}_16.png")
@@ -821,6 +828,39 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
         return self._SVC_NAMES
 
 
+# ── AutoStart Job (fires on onFirstVisibleTask) ─────────────────────────────
+
+class MCPAutoStartJob(unohelper.Base, XJob, XServiceInfo):
+    """LO Job triggered by onFirstVisibleTask — starts MCP server at LO launch."""
+    _IMPL_NAME = "org.mcp.libreoffice.MCPAutoStart"
+    _SVC_NAMES = ("com.sun.star.task.Job",)
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def execute(self, args):
+        logger.info("AutoStart job triggered (onFirstVisibleTask)")
+        try:
+            if _config.get("autostart", True):
+                threading.Thread(
+                    target=_start_mcp_server, daemon=True,
+                    name="mcp-job-start").start()
+            else:
+                logger.info("AutoStart job: autostart disabled in config")
+        except Exception as e:
+            logger.error(f"AutoStart job failed: {e}")
+        return ()
+
+    def getImplementationName(self):
+        return self._IMPL_NAME
+
+    def supportsService(self, name):
+        return name in self._SVC_NAMES
+
+    def getSupportedServiceNames(self):
+        return self._SVC_NAMES
+
+
 # ── UNO component registration ──────────────────────────────────────────────
 
 g_ImplementationHelper = unohelper.ImplementationHelper()
@@ -834,44 +874,10 @@ g_ImplementationHelper.addImplementation(
     MCPOptionsHandler._IMPL_NAME,
     MCPOptionsHandler._SVC_NAMES,
 )
+g_ImplementationHelper.addImplementation(
+    MCPAutoStartJob,
+    MCPAutoStartJob._IMPL_NAME,
+    MCPAutoStartJob._SVC_NAMES,
+)
 
-logger.info("g_ImplementationHelper configured (2 services)")
-
-
-# ── Auto-start MCP server on extension load ──────────────────────────────────
-
-import time as _time
-
-def _autostart():
-    """Auto-start the MCP server after LibreOffice is ready."""
-    global _autostart_done
-
-    # Cross-load guard: only the first thread to acquire the lock proceeds
-    if not _autostart_lock.acquire(blocking=False):
-        logger.info("Auto-start: another thread already owns the lock, skipping")
-        return
-    try:
-        if _autostart_done:
-            logger.info("Auto-start: already completed, skipping")
-            return
-
-        # Wait for LO to finish initializing
-        for attempt in range(1, 6):
-            _time.sleep(3 * attempt)  # 3s, 6s, 9s, 12s, 15s
-            logger.info(f"Auto-start attempt {attempt}/5...")
-            try:
-                _start_mcp_server()
-                _autostart_done = True
-                logger.info("Auto-start succeeded")
-                return
-            except Exception as e:
-                logger.warning(f"Auto-start attempt {attempt} failed: {e}")
-        logger.error("Auto-start gave up after 5 attempts")
-    finally:
-        _autostart_lock.release()
-
-if _config.get("autostart", True):
-    threading.Thread(target=_autostart, daemon=True, name="mcp-autostart").start()
-    logger.info("Auto-start thread launched")
-else:
-    logger.info("Auto-start disabled in config")
+logger.info("g_ImplementationHelper configured (3 services)")
