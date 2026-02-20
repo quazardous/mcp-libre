@@ -8,6 +8,8 @@ and other LibreOffice formats.
 
 import asyncio
 import json
+import os
+import platform
 import subprocess
 import tempfile
 import time
@@ -22,6 +24,295 @@ from mcp.server.fastmcp import FastMCP
 
 # Initialize FastMCP server
 mcp = FastMCP("LibreOffice MCP Server")
+
+# Configuration: set MCP_LIBREOFFICE_GUI=1 to run LibreOffice with visible window
+# instead of headless mode. Useful for seeing changes in real-time.
+HEADLESS_MODE = os.environ.get("MCP_LIBREOFFICE_GUI", "0") not in ("1", "true", "yes")
+
+# ============================================================================
+# Plugin HTTP API (UNO bridge running inside LibreOffice on port 8765)
+# ============================================================================
+
+PLUGIN_API_URL = os.environ.get("MCP_PLUGIN_URL", "http://localhost:8765")
+_plugin_available: Optional[bool] = None
+_plugin_check_time: float = 0.0
+_PLUGIN_CHECK_INTERVAL = 30.0
+
+
+def _check_plugin_available() -> bool:
+    """Check if the LibreOffice plugin HTTP API is available (cached)."""
+    global _plugin_available, _plugin_check_time
+    now = time.time()
+    if _plugin_available is not None and (now - _plugin_check_time) < _PLUGIN_CHECK_INTERVAL:
+        return _plugin_available
+    try:
+        with httpx.Client(timeout=3.0) as client:
+            resp = client.get(f"{PLUGIN_API_URL}/health")
+            _plugin_available = resp.status_code == 200
+    except Exception:
+        _plugin_available = False
+    _plugin_check_time = now
+    return _plugin_available
+
+
+def _call_plugin(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Call a tool on the LibreOffice plugin HTTP API."""
+    if not _check_plugin_available():
+        raise RuntimeError(
+            "LibreOffice plugin not available. Start LibreOffice with the "
+            "MCP extension (HTTP API on http://localhost:8765)."
+        )
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(
+                f"{PLUGIN_API_URL}/tools/{tool_name}", json=params)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.ConnectError:
+        global _plugin_available
+        _plugin_available = None
+        raise RuntimeError("Lost connection to LibreOffice plugin.")
+    except httpx.TimeoutException:
+        raise RuntimeError("Plugin API call timed out.")
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"Plugin API error ({e.response.status_code}): "
+                           f"{e.response.text}")
+
+
+# ============================================================================
+# Context-efficient document tools (via LibreOffice UNO plugin)
+# ============================================================================
+
+@mcp.tool()
+def get_document_tree(path: str, content_strategy: str = "first_lines",
+                      depth: int = 1) -> Dict[str, Any]:
+    """Get the heading tree of a document without loading full text.
+
+    Returns headings organized as a tree. Use depth to control how many
+    levels are returned (1=top-level only, 2=two levels, 0=full tree).
+    Use content_strategy to control body text visibility:
+    none, first_lines, ai_summary_first, full.
+
+    Args:
+        path: Absolute path to the document
+        content_strategy: What to show for body text (default: first_lines)
+        depth: Heading levels to return (default: 1)
+    """
+    return _call_plugin("get_document_tree", {
+        "file_path": path, "content_strategy": content_strategy,
+        "depth": depth})
+
+
+@mcp.tool()
+def get_heading_children(path: str, heading_para_index: int = None,
+                         heading_bookmark: str = None,
+                         content_strategy: str = "first_lines",
+                         depth: int = 1) -> Dict[str, Any]:
+    """Drill down into a heading to see its children.
+
+    Use heading_bookmark (stable across edits) or heading_para_index.
+    All heading nodes in the response include a 'bookmark' field.
+
+    Args:
+        path: Absolute path to the document
+        heading_para_index: Paragraph index of the parent heading
+        heading_bookmark: Bookmark name (stable alternative to para_index)
+        content_strategy: none, first_lines, ai_summary_first, full
+        depth: Sub-levels to include (default: 1)
+    """
+    params = {"file_path": path, "content_strategy": content_strategy,
+              "depth": depth}
+    if heading_bookmark is not None:
+        params["heading_bookmark"] = heading_bookmark
+    if heading_para_index is not None:
+        params["heading_para_index"] = heading_para_index
+    return _call_plugin("get_heading_children", params)
+
+
+@mcp.tool()
+def read_document_paragraphs(path: str, start_index: int,
+                             count: int = 10) -> Dict[str, Any]:
+    """Read specific paragraphs by index range.
+
+    Use get_document_tree first to find which paragraphs to read.
+
+    Args:
+        path: Absolute path to the document
+        start_index: Zero-based index of first paragraph
+        count: Number of paragraphs to read (default: 10)
+    """
+    return _call_plugin("read_paragraphs", {
+        "file_path": path, "start_index": start_index, "count": count})
+
+
+@mcp.tool()
+def get_document_paragraph_count(path: str) -> Dict[str, Any]:
+    """Get total paragraph count of a document.
+
+    Args:
+        path: Absolute path to the document
+    """
+    return _call_plugin("get_paragraph_count", {"file_path": path})
+
+
+@mcp.tool()
+def search_in_document(path: str, pattern: str, regex: bool = False,
+                       case_sensitive: bool = False,
+                       max_results: int = 20,
+                       context_paragraphs: int = 1) -> Dict[str, Any]:
+    """Search for text in a document with paragraph context.
+
+    Uses LibreOffice native search. Returns matches with surrounding
+    paragraphs for context, without loading the entire document.
+
+    Args:
+        path: Absolute path to the document
+        pattern: Search string or regex
+        regex: Use regular expression (default: False)
+        case_sensitive: Case-sensitive search (default: False)
+        max_results: Max results to return (default: 20)
+        context_paragraphs: Paragraphs of context around each match (default: 1)
+    """
+    return _call_plugin("search_in_document", {
+        "file_path": path, "pattern": pattern, "regex": regex,
+        "case_sensitive": case_sensitive, "max_results": max_results,
+        "context_paragraphs": context_paragraphs})
+
+
+@mcp.tool()
+def replace_in_document(path: str, search: str, replace: str,
+                        regex: bool = False,
+                        case_sensitive: bool = False) -> Dict[str, Any]:
+    """Find and replace text preserving all formatting.
+
+    Args:
+        path: Absolute path to the document
+        search: Text to find
+        replace: Replacement text
+        regex: Use regular expression (default: False)
+        case_sensitive: Case-sensitive matching (default: False)
+    """
+    return _call_plugin("replace_in_document", {
+        "file_path": path, "search": search, "replace": replace,
+        "regex": regex, "case_sensitive": case_sensitive})
+
+
+@mcp.tool()
+def insert_text_at_paragraph(path: str, paragraph_index: int,
+                             text: str,
+                             position: str = "after") -> Dict[str, Any]:
+    """Insert text before or after a specific paragraph.
+
+    Preserves all existing formatting.
+
+    Args:
+        path: Absolute path to the document
+        paragraph_index: Target paragraph index
+        text: Text to insert
+        position: 'before' or 'after' (default: after)
+    """
+    return _call_plugin("insert_at_paragraph", {
+        "file_path": path, "paragraph_index": paragraph_index,
+        "text": text, "position": position})
+
+
+@mcp.tool()
+def add_document_ai_summary(path: str, para_index: int,
+                            summary: str) -> Dict[str, Any]:
+    """Add an AI annotation/summary to a heading.
+
+    The summary is stored as a Writer annotation with Author='MCP-AI'.
+    It will be shown when using content_strategy='ai_summary_first'.
+
+    Args:
+        path: Absolute path to the document
+        para_index: Paragraph index of the heading
+        summary: Summary text to attach
+    """
+    return _call_plugin("add_ai_summary", {
+        "file_path": path, "para_index": para_index, "summary": summary})
+
+
+@mcp.tool()
+def get_document_ai_summaries(path: str) -> Dict[str, Any]:
+    """List all AI annotations in a document.
+
+    Args:
+        path: Absolute path to the document
+    """
+    return _call_plugin("get_ai_summaries", {"file_path": path})
+
+
+@mcp.tool()
+def remove_document_ai_summary(path: str,
+                               para_index: int) -> Dict[str, Any]:
+    """Remove an AI annotation from a heading.
+
+    Args:
+        path: Absolute path to the document
+        para_index: Paragraph index of the heading
+    """
+    return _call_plugin("remove_ai_summary", {
+        "file_path": path, "para_index": para_index})
+
+
+@mcp.tool()
+def list_document_sections(path: str) -> Dict[str, Any]:
+    """List all named text sections in a document.
+
+    Args:
+        path: Absolute path to the document
+    """
+    return _call_plugin("list_sections", {"file_path": path})
+
+
+@mcp.tool()
+def read_document_section(path: str,
+                          section_name: str) -> Dict[str, Any]:
+    """Read the content of a named text section.
+
+    Args:
+        path: Absolute path to the document
+        section_name: Name of the section
+    """
+    return _call_plugin("read_section", {
+        "file_path": path, "section_name": section_name})
+
+
+@mcp.tool()
+def list_document_bookmarks(path: str) -> Dict[str, Any]:
+    """List all bookmarks in a document.
+
+    Args:
+        path: Absolute path to the document
+    """
+    return _call_plugin("list_bookmarks", {"file_path": path})
+
+
+@mcp.tool()
+def resolve_document_bookmark(path: str,
+                               bookmark_name: str) -> Dict[str, Any]:
+    """Resolve a heading bookmark to its current paragraph index.
+
+    Bookmarks are stable identifiers that survive document edits.
+    Use this to find the current position of a previously bookmarked heading.
+
+    Args:
+        path: Absolute path to the document
+        bookmark_name: Bookmark name (e.g. _mcp_a1b2c3d4)
+    """
+    return _call_plugin("resolve_bookmark", {
+        "file_path": path, "bookmark_name": bookmark_name})
+
+
+@mcp.tool()
+def get_document_page_count(path: str) -> Dict[str, Any]:
+    """Get the page count of a document.
+
+    Args:
+        path: Absolute path to the document
+    """
+    return _call_plugin("get_page_count", {"file_path": path})
 
 
 # Data models for structured responses
@@ -62,26 +353,103 @@ class SpreadsheetData(BaseModel):
 
 
 # Helper functions
+
+def _find_libreoffice_executable() -> str:
+    """Find the LibreOffice executable on the current platform."""
+    if platform.system() == "Windows":
+        # On Windows, check common install locations
+        candidates = []
+        for prog_dir in [os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                         os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")]:
+            if prog_dir:
+                candidates.append(os.path.join(prog_dir, "LibreOffice", "program", "soffice.exe"))
+        # Also try PATH
+        for name in ['soffice', 'soffice.exe', 'libreoffice', 'loffice']:
+            import shutil
+            found = shutil.which(name)
+            if found:
+                return found
+        # Check install paths
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return "soffice"  # fallback, let subprocess raise if not found
+    else:
+        # Unix: try common names in PATH
+        import shutil
+        for name in ['libreoffice', 'loffice', 'soffice']:
+            found = shutil.which(name)
+            if found:
+                return found
+        return "libreoffice"  # fallback
+
+
+# Cache the result to avoid repeated filesystem scans
+_libreoffice_exe: Optional[str] = None
+
+def _get_libreoffice_exe() -> str:
+    """Return the cached LibreOffice executable path."""
+    global _libreoffice_exe
+    if _libreoffice_exe is None:
+        _libreoffice_exe = _find_libreoffice_executable()
+    return _libreoffice_exe
+
+
+def _is_libreoffice_running() -> bool:
+    """Check if a LibreOffice process is already running."""
+    try:
+        if platform.system() == "Windows":
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq soffice.bin", "/NH"],
+                capture_output=True, text=True, timeout=5)
+            return "soffice.bin" in result.stdout
+        else:
+            result = subprocess.run(
+                ["pgrep", "-x", "soffice.bin"],
+                capture_output=True, timeout=5)
+            return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _run_libreoffice_command(args: List[str], timeout: int = 30) -> subprocess.CompletedProcess:
     """Run a LibreOffice command with proper error handling"""
+    executable = _get_libreoffice_exe()
     try:
-        # Try different common LibreOffice executable names
-        for executable in ['libreoffice', 'loffice', 'soffice']:
-            try:
-                cmd = [executable] + args
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False
-                )
-                if result.returncode == 0 or executable == 'soffice':  # soffice might work even if return code != 0
-                    return result
-            except FileNotFoundError:
-                continue
-        
-        raise FileNotFoundError("LibreOffice executable not found. Please install LibreOffice.")
+        # In GUI mode, refuse to run if LibreOffice is already open
+        if not HEADLESS_MODE and _is_libreoffice_running():
+            raise RuntimeError(
+                "LibreOffice is already running. In GUI mode (MCP_LIBREOFFICE_GUI=1), "
+                "the MCP server needs exclusive access. Close LibreOffice first, "
+                "or use the desktop shortcut created by create-shortcut.ps1."
+            )
+        # In GUI mode, strip --headless so the user sees LibreOffice working
+        if not HEADLESS_MODE:
+            args = [a for a in args if a != '--headless']
+        cmd = [executable] + args
+        # On Windows in headless mode, hide the console window
+        kwargs = {}
+        if platform.system() == "Windows" and HEADLESS_MODE:
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = 0  # SW_HIDE
+            kwargs['startupinfo'] = startupinfo
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            **kwargs
+        )
+        return result
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"LibreOffice executable not found at '{executable}'. "
+            "Please install LibreOffice and ensure it is in your PATH.\n"
+            "Windows: run setup-windows.ps1 or add LibreOffice\\program to PATH."
+        )
     except subprocess.TimeoutExpired:
         raise TimeoutError(f"LibreOffice command timed out after {timeout} seconds")
 
@@ -548,9 +916,10 @@ def modify_document():
         
         # Start LibreOffice if not running
         import subprocess
-        subprocess.Popen([
-            "libreoffice", "--headless", "--accept=socket,host=127.0.0.1,port=2002;urp;"
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        lo_cmd = [_get_libreoffice_exe(), "--accept=socket,host=127.0.0.1,port=2002;urp;"]
+        if HEADLESS_MODE:
+            lo_cmd.insert(1, "--headless")
+        subprocess.Popen(lo_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         import time
         time.sleep(2)  # Wait for LibreOffice to start
@@ -1105,7 +1474,7 @@ def open_document_in_libreoffice(path: str, readonly: bool = False) -> Dict[str,
     
     try:
         # Build command to open LibreOffice with GUI
-        cmd = ['libreoffice']
+        cmd = [_get_libreoffice_exe()]
         
         if readonly:
             cmd.append('--view')
@@ -1118,7 +1487,10 @@ def open_document_in_libreoffice(path: str, readonly: bool = False) -> Dict[str,
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True  # Detach from parent process
+            # Detach from parent process (platform-appropriate)
+            **({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+               if platform.system() == "Windows"
+               else {"start_new_session": True})
         )
         
         return {
@@ -1157,11 +1529,12 @@ def refresh_document_in_libreoffice(path: str) -> Dict[str, Any]:
         # Method 2: Try to send a signal via LibreOffice's socket interface
         try:
             # This is a more advanced approach that may work if LibreOffice is running
-            result = subprocess.run([
-                'libreoffice', '--invisible', '--headless',
+            refresh_cmd = [_get_libreoffice_exe(), '--invisible',
                 '--accept=socket,host=127.0.0.1,port=2002;urp;',
-                '--norestore', '--nologo'
-            ], timeout=2, capture_output=True)
+                '--norestore', '--nologo']
+            if HEADLESS_MODE:
+                refresh_cmd.insert(1, '--headless')
+            result = subprocess.run(refresh_cmd, timeout=2, capture_output=True)
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass  # LibreOffice may already be running or not available
         

@@ -23,10 +23,9 @@ logger = logging.getLogger(__name__)
 
 class MCPRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for MCP API"""
-    
-    def __init__(self, *args, **kwargs):
-        self.mcp_server = get_mcp_server()
-        super().__init__(*args, **kwargs)
+
+    # Set at class level by AIInterface before server starts
+    mcp_server = None
     
     def do_GET(self):
         """Handle GET requests"""
@@ -168,24 +167,31 @@ class AIInterface:
             if self.running:
                 logger.warning("Server is already running")
                 return
-            
-            # Create HTTP server
-            with socketserver.TCPServer(("", self.port), MCPRequestHandler) as server:
-                server.allow_reuse_address = True
-                self.server = server
-                self.running = True
-                
-                logger.info(f"Started MCP HTTP server on {self.host}:{self.port}")
-                
-                # Start server in background thread
-                self.server_thread = threading.Thread(
-                    target=self._run_server,
-                    daemon=True
-                )
-                self.server_thread.start()
-                
-                logger.info("MCP HTTP server started successfully")
-                
+
+            # Inject MCP server reference into handler class
+            MCPRequestHandler.mcp_server = get_mcp_server()
+
+            # Do NOT set allow_reuse_address on Windows - it allows multiple
+            # servers to shadow the same port, causing empty responses.
+            self.server = HTTPServer(
+                (self.host, self.port), MCPRequestHandler
+            )
+            self.running = True
+
+            logger.info(f"Started MCP HTTP server on {self.host}:{self.port}")
+
+            self.server_thread = threading.Thread(
+                target=self._run_server,
+                daemon=True
+            )
+            self.server_thread.start()
+
+            logger.info("MCP HTTP server started successfully")
+
+        except OSError as e:
+            logger.error(f"Failed to bind HTTP server to {self.host}:{self.port}: {e}")
+            self.running = False
+            raise
         except Exception as e:
             logger.error(f"Failed to start HTTP server: {e}")
             self.running = False

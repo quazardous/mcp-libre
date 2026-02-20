@@ -163,6 +163,283 @@ class LibreOfficeMCPServer:
             "handler": self.list_open_documents
         }
         
+        # -------------------------------------------------------
+        # Context-efficient document tools (tree navigation)
+        # -------------------------------------------------------
+
+        self.tools["open_document"] = {
+            "description": "Open a document by file path in LibreOffice",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "Absolute file path"}
+                },
+                "required": ["file_path"]
+            },
+            "handler": self._h_open_document
+        }
+
+        self.tools["get_document_tree"] = {
+            "description": "Get document heading tree. Use depth to control "
+                           "how many levels are returned.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content_strategy": {
+                        "type": "string",
+                        "enum": ["none", "first_lines",
+                                 "ai_summary_first", "full"],
+                        "description": "What to show for body text "
+                                       "(default: first_lines)"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Levels to return: 1=direct children, "
+                                       "2=two levels, 0=unlimited (default: 1)"
+                    },
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_get_document_tree
+        }
+
+        self.tools["get_heading_children"] = {
+            "description": "Get children of a heading (drill down into tree). "
+                           "Use heading_bookmark for stable navigation.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "heading_para_index": {
+                        "type": "integer",
+                        "description": "Paragraph index of the heading"
+                    },
+                    "heading_bookmark": {
+                        "type": "string",
+                        "description": "Bookmark name (alternative to "
+                                       "para_index, more stable)"
+                    },
+                    "content_strategy": {
+                        "type": "string",
+                        "enum": ["none", "first_lines",
+                                 "ai_summary_first", "full"],
+                        "description": "default: first_lines"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "Sub-levels to include (default: 1)"
+                    },
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_get_heading_children
+        }
+
+        self.tools["read_paragraphs"] = {
+            "description": "Read a range of paragraphs by index",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_index": {"type": "integer",
+                                    "description": "First paragraph index"},
+                    "count": {"type": "integer",
+                              "description": "Number to read (default: 10)"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["start_index"]
+            },
+            "handler": self._h_read_paragraphs
+        }
+
+        self.tools["get_paragraph_count"] = {
+            "description": "Get total paragraph count",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_get_paragraph_count
+        }
+
+        self.tools["search_in_document"] = {
+            "description": "Search text with paragraph context",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string",
+                                "description": "Search string or regex"},
+                    "regex": {"type": "boolean",
+                              "description": "Use regex (default: false)"},
+                    "case_sensitive": {"type": "boolean",
+                                      "description": "default: false"},
+                    "max_results": {"type": "integer",
+                                    "description": "default: 20"},
+                    "context_paragraphs": {
+                        "type": "integer",
+                        "description": "Paragraphs of context (default: 1)"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["pattern"]
+            },
+            "handler": self._h_search_in_document
+        }
+
+        self.tools["replace_in_document"] = {
+            "description": "Find and replace text (preserves formatting)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "search": {"type": "string", "description": "Text to find"},
+                    "replace": {"type": "string",
+                                "description": "Replacement text"},
+                    "regex": {"type": "boolean", "description": "default: false"},
+                    "case_sensitive": {"type": "boolean",
+                                      "description": "default: false"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["search", "replace"]
+            },
+            "handler": self._h_replace_in_document
+        }
+
+        self.tools["insert_at_paragraph"] = {
+            "description": "Insert text before or after a paragraph",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paragraph_index": {"type": "integer",
+                                        "description": "Target paragraph"},
+                    "text": {"type": "string", "description": "Text to insert"},
+                    "position": {"type": "string", "enum": ["before", "after"],
+                                 "description": "default: after"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["paragraph_index", "text"]
+            },
+            "handler": self._h_insert_at_paragraph
+        }
+
+        self.tools["add_ai_summary"] = {
+            "description": "Add an AI annotation/summary to a heading",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "para_index": {"type": "integer",
+                                   "description": "Heading paragraph index"},
+                    "summary": {"type": "string",
+                                "description": "Summary text"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["para_index", "summary"]
+            },
+            "handler": self._h_add_ai_summary
+        }
+
+        self.tools["get_ai_summaries"] = {
+            "description": "List all AI annotations in the document",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_get_ai_summaries
+        }
+
+        self.tools["remove_ai_summary"] = {
+            "description": "Remove an AI annotation from a heading",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "para_index": {"type": "integer",
+                                   "description": "Heading paragraph index"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["para_index"]
+            },
+            "handler": self._h_remove_ai_summary
+        }
+
+        self.tools["list_sections"] = {
+            "description": "List named text sections",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_list_sections
+        }
+
+        self.tools["read_section"] = {
+            "description": "Read the content of a named section",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section_name": {"type": "string",
+                                     "description": "Section name"},
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["section_name"]
+            },
+            "handler": self._h_read_section
+        }
+
+        self.tools["list_bookmarks"] = {
+            "description": "List all bookmarks in the document",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_list_bookmarks
+        }
+
+        self.tools["resolve_bookmark"] = {
+            "description": "Resolve a bookmark to its current paragraph index "
+                           "(bookmarks are stable across edits)",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bookmark_name": {
+                        "type": "string",
+                        "description": "Bookmark name (e.g. _mcp_a1b2c3d4)"
+                    },
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                },
+                "required": ["bookmark_name"]
+            },
+            "handler": self._h_resolve_bookmark
+        }
+
+        self.tools["get_page_count"] = {
+            "description": "Get the document page count",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string",
+                                  "description": "File path (optional)"}
+                }
+            },
+            "handler": self._h_get_page_count
+        }
+
         logger.info(f"Registered {len(self.tools)} MCP tools")
     
     async def execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
@@ -257,6 +534,84 @@ class LibreOfficeMCPServer:
         """Get text content of the currently active document"""
         return self.uno_bridge.get_text_content()
     
+    # -- Context-efficient tool handlers --
+
+    def _h_open_document(self, file_path: str) -> Dict[str, Any]:
+        result = self.uno_bridge.open_document(file_path)
+        return {k: v for k, v in result.items() if k != "doc"}
+
+    def _h_get_document_tree(self, content_strategy: str = "first_lines",
+                             depth: int = 1,
+                             file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_document_tree(
+            content_strategy, depth, file_path)
+
+    def _h_get_heading_children(self, heading_para_index: int = None,
+                                heading_bookmark: str = None,
+                                content_strategy: str = "first_lines",
+                                depth: int = 1,
+                                file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_heading_children(
+            heading_para_index, heading_bookmark,
+            content_strategy, depth, file_path)
+
+    def _h_read_paragraphs(self, start_index: int, count: int = 10,
+                           file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.read_paragraphs(start_index, count, file_path)
+
+    def _h_get_paragraph_count(self, file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_paragraph_count(file_path)
+
+    def _h_search_in_document(self, pattern: str, regex: bool = False,
+                              case_sensitive: bool = False,
+                              max_results: int = 20,
+                              context_paragraphs: int = 1,
+                              file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.search_document(
+            pattern, regex, case_sensitive, max_results,
+            context_paragraphs, file_path)
+
+    def _h_replace_in_document(self, search: str, replace: str,
+                               regex: bool = False,
+                               case_sensitive: bool = False,
+                               file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.replace_in_document(
+            search, replace, regex, case_sensitive, file_path)
+
+    def _h_insert_at_paragraph(self, paragraph_index: int, text: str,
+                               position: str = "after",
+                               file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.insert_at_paragraph(
+            paragraph_index, text, position, file_path)
+
+    def _h_add_ai_summary(self, para_index: int, summary: str,
+                           file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.add_ai_summary(para_index, summary, file_path)
+
+    def _h_get_ai_summaries(self, file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_ai_summaries(file_path)
+
+    def _h_remove_ai_summary(self, para_index: int,
+                              file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.remove_ai_summary(para_index, file_path)
+
+    def _h_list_sections(self, file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.list_sections(file_path)
+
+    def _h_read_section(self, section_name: str,
+                         file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.read_section(section_name, file_path)
+
+    def _h_list_bookmarks(self, file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.list_bookmarks(file_path)
+
+    def _h_resolve_bookmark(self, bookmark_name: str,
+                             file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.resolve_bookmark(bookmark_name, file_path)
+
+    def _h_get_page_count(self, file_path: str = None) -> Dict[str, Any]:
+        return self.uno_bridge.get_page_count(file_path)
+
     def list_open_documents(self) -> Dict[str, Any]:
         """List all open documents in LibreOffice"""
         try:
