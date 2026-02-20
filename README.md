@@ -1,6 +1,6 @@
 # LibreOffice MCP Server
 
-MCP server that lets AI assistants create, read, convert and edit LibreOffice documents.
+MCP server that lets AI assistants create, read, convert and edit LibreOffice documents in real-time.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![LibreOffice](https://img.shields.io/badge/LibreOffice-24.2+-green.svg)](https://www.libreoffice.org/)
@@ -9,110 +9,165 @@ MCP server that lets AI assistants create, read, convert and edit LibreOffice do
 
 ## Requirements
 
-- **LibreOffice** 24.2+ (accessible via command line)
+- **LibreOffice** 24.2+
 - **Python** 3.12+
 - **UV** package manager
 
+See [docs/prerequisites.md](docs/prerequisites.md) for install commands per platform.
+
 ## Installation
-
-### Windows
-
-```powershell
-git clone https://github.com/patrup/mcp-libre/
-cd mcp-libre
-.\setup-windows.ps1
-```
-
-The script installs all dependencies via winget, adds LibreOffice to PATH, runs `uv sync`, and configures Claude Desktop automatically.
-
-Options: `-CheckOnly` (dry run), `-SkipOptional` (skip Node.js/Java).
-
-### Linux / macOS
 
 ```bash
 git clone https://github.com/patrup/mcp-libre/
 cd mcp-libre
 uv sync
-./mcp-helper.sh check   # verify setup
 ```
 
-## Quick Start
+Windows: `.\setup-windows.ps1` installs everything automatically. See [docs/windows-setup.md](docs/windows-setup.md).
 
-```bash
-# Test the server
-uv run python src/main.py --test
+## Modes
 
-# Run as MCP server (stdio)
-uv run python src/main.py
+### Headless mode (default)
+
+The MCP server launches LibreOffice in headless mode for each operation. No GUI needed.
+
 ```
+MCP_LIBREOFFICE_GUI=0
+```
+
+### GUI mode (recommended)
+
+The MCP server delegates to a LibreOffice extension running inside an open LibreOffice instance. Real-time, faster, and you see changes live.
+
+```
+MCP_LIBREOFFICE_GUI=1
+MCP_PLUGIN_URL=http://localhost:8765
+```
+
+Requires the LibreOffice extension installed (see below).
+
+## LibreOffice Extension
+
+The extension embeds an HTTP API server inside LibreOffice (port 8765) with direct UNO API access.
+
+### Install (Windows)
+
+```powershell
+.\install-plugin.ps1        # build .oxt and install via unopkg
+```
+
+### Dev workflow (Windows)
+
+```powershell
+.\dev-deploy.ps1             # sync plugin/ to build/dev/ + junction in LO extensions
+# Then restart LibreOffice
+```
+
+The extension adds a **MCP Server** menu in LibreOffice with Start/Stop, Restart, Status, and About.
 
 ## Tools
+
+### Document operations
 
 | Tool | Description |
 |------|-------------|
 | `create_document` | Create Writer, Calc, Impress, Draw documents |
 | `read_document_text` | Extract text content |
-| `convert_document` | Convert between 50+ formats (PDF, DOCX, HTML...) |
+| `convert_document` | Convert between formats (PDF, DOCX, HTML...) |
 | `get_document_info` | Get document metadata |
 | `read_spreadsheet_data` | Read spreadsheet data as 2D arrays |
-| `insert_text_at_position` | Edit document text at a given position |
+| `insert_text_at_position` | Insert text at start, end, or replace |
 | `search_documents` | Find documents by content |
 | `batch_convert_documents` | Batch format conversion |
 | `merge_text_documents` | Merge multiple documents |
 | `get_document_statistics` | Word count, sentences, etc. |
-| `open_document_in_libreoffice` | Open in GUI for live viewing |
-| `create_live_editing_session` | Live editing with real-time preview |
-| `watch_document_changes` | Monitor document changes |
-| `refresh_document_in_libreoffice` | Force refresh in GUI |
 
-## Integration
+### Context-efficient navigation (via plugin)
+
+| Tool | Description |
+|------|-------------|
+| `get_document_tree` | Heading tree without loading full text |
+| `get_heading_children` | Drill down into a heading |
+| `read_document_paragraphs` | Read paragraphs by index range |
+| `get_document_paragraph_count` | Total paragraph count |
+| `get_document_page_count` | Page count |
+| `search_in_document` | Search with paragraph context |
+| `replace_in_document` | Find & replace preserving formatting |
+| `insert_text_at_paragraph` | Insert before/after a paragraph |
+
+### Bookmarks, sections & annotations
+
+| Tool | Description |
+|------|-------------|
+| `list_document_bookmarks` | List all bookmarks |
+| `resolve_document_bookmark` | Resolve bookmark to paragraph index |
+| `list_document_sections` | List named text sections |
+| `read_document_section` | Read a section's content |
+| `add_document_ai_summary` | Add AI annotation to a heading |
+| `get_document_ai_summaries` | List all AI annotations |
+| `remove_document_ai_summary` | Remove an AI annotation |
+
+### Live viewing
+
+| Tool | Description |
+|------|-------------|
+| `open_document_in_libreoffice` | Open in GUI |
+| `refresh_document_in_libreoffice` | Force refresh in GUI |
+| `create_live_editing_session` | Live editing session |
+| `watch_document_changes` | Monitor file changes |
+
+## Configuration
 
 ### Claude Desktop
 
-**Windows** (done automatically by `setup-windows.ps1`):
-
 Config at `%APPDATA%\Claude\claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {
     "libreoffice": {
-      "command": "uv",
+      "command": "C:/Users/you/.local/bin/uv.exe",
       "args": ["run", "python", "src/main.py"],
       "cwd": "C:/Users/you/mcp-libre",
       "env": {
         "PYTHONPATH": "C:/Users/you/mcp-libre/src",
-        "MCP_LIBREOFFICE_GUI": "0"
+        "MCP_LIBREOFFICE_GUI": "1",
+        "MCP_PLUGIN_URL": "http://localhost:8765"
       }
     }
   }
 }
 ```
 
-**Linux / macOS**:
-```bash
-./generate-config.sh claude
-```
+### Claude Code
 
-### LibreOffice Extension (optional, 10x faster)
+Add a `.mcp.json` at the project root:
 
-```bash
-cd plugin/
-./install.sh install   # build & install
-./install.sh test      # verify
-```
-
-Provides an HTTP API on `localhost:8765` with direct UNO API access. See [plugin/README.md](plugin/README.md).
-
-### Super Assistant Chrome Extension
-
-```bash
-./generate-config.sh mcp
-npx @srbhptl39/mcp-superassistant-proxy@latest --config ~/Documents/mcp/mcp.config.json
+```json
+{
+  "mcpServers": {
+    "libreoffice": {
+      "type": "stdio",
+      "command": "C:/Users/you/.local/bin/uv.exe",
+      "args": ["run", "python", "src/main.py"],
+      "cwd": "C:/Users/you/mcp-libre",
+      "env": {
+        "PYTHONPATH": "C:/Users/you/mcp-libre/src",
+        "MCP_LIBREOFFICE_GUI": "1",
+        "MCP_PLUGIN_URL": "http://localhost:8765"
+      }
+    }
+  }
+}
 ```
 
 ## Documentation
 
-See the [docs/](docs/) folder: [Windows Setup](docs/WINDOWS_SETUP.md) | [Prerequisites](docs/PREREQUISITES.md) | [Examples](docs/EXAMPLES.md) | [Troubleshooting](docs/TROUBLESHOOTING.md) | [Plugin Guide](docs/PLUGIN_MIGRATION_GUIDE.md) | [Live Viewing](docs/LIVE_VIEWING_GUIDE.md)
+- [Prerequisites](docs/prerequisites.md)
+- [Windows Setup](docs/windows-setup.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Live Viewing](docs/live-viewing.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 

@@ -500,6 +500,15 @@ def create_document(path: str, doc_type: str = "writer", content: str = "") -> D
         path_obj = Path(path)
     
     try:
+        # GUI mode: delegate to plugin HTTP API (LO already running)
+        if not HEADLESS_MODE:
+            _call_plugin("create_document_live", {"doc_type": doc_type})
+            if content and doc_type == "writer":
+                _call_plugin("insert_text_live", {"text": content})
+            _call_plugin("save_document_live", {
+                "file_path": str(path_obj.absolute())})
+            return _get_document_info(str(path_obj))
+
         if doc_type == "writer" and content:
             # For writer documents with content, create a simple text file first
             # then convert to ODT format
@@ -627,6 +636,19 @@ def read_document_text(path: str) -> TextContent:
         raise FileNotFoundError(f"Document not found: {path}")
     
     try:
+        # GUI mode: delegate to plugin HTTP API
+        if not HEADLESS_MODE:
+            _call_plugin("open_document", {
+                "file_path": str(path_obj.absolute())})
+            text_result = _call_plugin("get_text_content_live", {})
+            txt = text_result.get("content", "")
+            return TextContent(
+                content=txt,
+                word_count=len(txt.split()),
+                char_count=len(txt),
+                page_count=text_result.get("page_count")
+            )
+
         # Use LibreOffice to convert to plain text
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = _run_libreoffice_command([
@@ -741,6 +763,25 @@ def convert_document(source_path: str, target_path: str, target_format: str) -> 
     target_obj.parent.mkdir(parents=True, exist_ok=True)
     
     try:
+        # GUI mode: delegate to plugin HTTP API
+        if not HEADLESS_MODE:
+            _call_plugin("open_document", {
+                "file_path": str(source_obj.absolute())})
+            export_result = _call_plugin("export_document_live", {
+                "export_format": target_format,
+                "file_path": str(target_obj.absolute())
+            })
+            success = export_result.get("success", False) or target_obj.exists()
+            return ConversionResult(
+                source_path=source_path,
+                target_path=str(target_obj),
+                source_format=source_obj.suffix.lower().lstrip('.'),
+                target_format=target_format,
+                success=success,
+                error_message=None if success else export_result.get(
+                    "error", "Export failed")
+            )
+
         result = _run_libreoffice_command([
             '--headless',
             '--convert-to', target_format,
@@ -802,6 +843,35 @@ def read_spreadsheet_data(path: str, sheet_name: Optional[str] = None, max_rows:
         raise FileNotFoundError(f"Spreadsheet not found: {path}")
     
     try:
+        # GUI mode: delegate to plugin HTTP API
+        if not HEADLESS_MODE:
+            _call_plugin("open_document", {
+                "file_path": str(path_obj.absolute())})
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                csv_path = str(Path(tmp_dir) / (path_obj.stem + ".csv"))
+                _call_plugin("export_document_live", {
+                    "export_format": "csv", "file_path": csv_path})
+                csv_file = Path(csv_path)
+                if not csv_file.exists():
+                    raise RuntimeError(
+                        "Failed to export spreadsheet to CSV")
+                import csv
+                data = []
+                with open(csv_file, 'r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    for i, row in enumerate(reader):
+                        if i >= max_rows:
+                            break
+                        data.append(row)
+                row_count = len(data)
+                col_count = max(len(row) for row in data) if data else 0
+                return SpreadsheetData(
+                    sheet_name=sheet_name or "Sheet1",
+                    data=data,
+                    row_count=row_count,
+                    col_count=col_count
+                )
+
         # Convert to CSV to easily read the data
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = _run_libreoffice_command([
@@ -853,9 +923,37 @@ def insert_text_at_position(path: str, text: str, position: str = "end") -> Docu
         raise FileNotFoundError(f"Document not found: {path}")
     
     try:
+        # GUI mode: delegate to plugin HTTP API
+        if not HEADLESS_MODE:
+            _call_plugin("open_document", {
+                "file_path": str(path_obj.absolute())})
+            text_result = _call_plugin("get_text_content_live", {})
+            existing_content = text_result.get("content", "")
+
+            if position == "start":
+                new_content = text + "\n" + existing_content
+            elif position == "end":
+                new_content = existing_content + "\n" + text
+            elif position == "replace":
+                new_content = text
+            else:
+                raise ValueError(
+                    "Position must be 'start', 'end', or 'replace'")
+
+            file_ext = path_obj.suffix.lower()
+            if file_ext == '.odt':
+                _create_minimal_odt(path_obj, new_content)
+            else:
+                with open(path_obj, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+            # Reopen so LO GUI reflects changes
+            _call_plugin("open_document", {
+                "file_path": str(path_obj.absolute())})
+            return _get_document_info(str(path_obj))
+
         # Read existing content
         existing_content = read_document_text(path).content
-        
+
         # Determine new content based on position
         if position == "start":
             new_content = text + "\n" + existing_content
@@ -865,7 +963,7 @@ def insert_text_at_position(path: str, text: str, position: str = "end") -> Docu
             new_content = text
         else:
             raise ValueError("Position must be 'start', 'end', or 'replace'")
-        
+
         # Get file extension to determine document type
         file_ext = path_obj.suffix.lower()
         
@@ -1473,15 +1571,27 @@ def open_document_in_libreoffice(path: str, readonly: bool = False) -> Dict[str,
         raise FileNotFoundError(f"Document not found: {path}")
     
     try:
+        # GUI mode: use plugin HTTP API (LO already running)
+        if not HEADLESS_MODE:
+            result = _call_plugin("open_document", {
+                "file_path": str(path_obj.absolute())})
+            return {
+                "success": result.get("success", True),
+                "message": f"Opened {path_obj.name} in LibreOffice",
+                "path": str(path_obj.absolute()),
+                "readonly": readonly,
+                "note": "Document opened in running LibreOffice instance."
+            }
+
         # Build command to open LibreOffice with GUI
         cmd = [_get_libreoffice_exe()]
-        
+
         if readonly:
             cmd.append('--view')
-        
+
         # Add the document path
         cmd.append(str(path_obj.absolute()))
-        
+
         # Start LibreOffice GUI (non-blocking)
         process = subprocess.Popen(
             cmd,
@@ -1492,7 +1602,7 @@ def open_document_in_libreoffice(path: str, readonly: bool = False) -> Dict[str,
                if platform.system() == "Windows"
                else {"start_new_session": True})
         )
-        
+
         return {
             "success": True,
             "message": f"Opened {path_obj.name} in LibreOffice GUI",
@@ -1518,17 +1628,21 @@ def refresh_document_in_libreoffice(path: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Document not found: {path}")
     
     try:
-        # Try to send a signal to LibreOffice to refresh
-        # This uses LibreOffice's ability to detect file changes
-        
-        # Method 1: Touch the file to update modification time
-        import time
-        current_time = time.time()
+        # GUI mode: reopen via plugin API to force refresh
+        if not HEADLESS_MODE:
+            _call_plugin("open_document", {
+                "file_path": str(path_obj.absolute())})
+            return {
+                "success": True,
+                "message": f"Refreshed {path_obj.name} in LibreOffice",
+                "path": str(path_obj.absolute()),
+            }
+
+        # Touch the file to update modification time
         path_obj.touch()
-        
-        # Method 2: Try to send a signal via LibreOffice's socket interface
+
+        # Try to send a signal via LibreOffice's socket interface
         try:
-            # This is a more advanced approach that may work if LibreOffice is running
             refresh_cmd = [_get_libreoffice_exe(), '--invisible',
                 '--accept=socket,host=127.0.0.1,port=2002;urp;',
                 '--norestore', '--nologo']
@@ -1536,15 +1650,15 @@ def refresh_document_in_libreoffice(path: str) -> Dict[str, Any]:
                 refresh_cmd.insert(1, '--headless')
             result = subprocess.run(refresh_cmd, timeout=2, capture_output=True)
         except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass  # LibreOffice may already be running or not available
-        
+            pass
+
         return {
             "success": True,
             "message": f"Refresh signal sent for {path_obj.name}",
             "path": str(path_obj.absolute()),
             "note": "LibreOffice should detect the file change and prompt to reload. Manual refresh may be needed."
         }
-        
+
     except Exception as e:
         return {
             "success": False,
