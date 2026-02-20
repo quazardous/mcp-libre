@@ -75,60 +75,24 @@ Then restart LibreOffice to pick up changes.
 
 The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restart, Status, and About.
 
-## Tools
+## Tools (67+)
 
-### Document operations
-
-| Tool | Description |
-|------|-------------|
-| `create_document` | Create Writer, Calc, Impress, Draw documents |
-| `read_document_text` | Extract text content |
-| `convert_document` | Convert between formats (PDF, DOCX, HTML...) |
-| `get_document_info` | Get document metadata |
-| `read_spreadsheet_data` | Read spreadsheet data as 2D arrays |
-| `insert_text_at_position` | Insert text at start, end, or replace |
-| `search_documents` | Find documents by content |
-| `batch_convert_documents` | Batch format conversion |
-| `merge_text_documents` | Merge multiple documents |
-| `get_document_statistics` | Word count, sentences, etc. |
-
-### Context-efficient navigation (via plugin)
-
-| Tool | Description |
-|------|-------------|
-| `get_document_tree` | Heading tree without loading full text |
-| `get_heading_children` | Drill down into a heading |
-| `read_document_paragraphs` | Read paragraphs by index range |
-| `get_document_paragraph_count` | Total paragraph count |
-| `get_document_page_count` | Page count |
-| `search_in_document` | Search with paragraph context |
-| `replace_in_document` | Find & replace preserving formatting |
-| `insert_text_at_paragraph` | Insert before/after a paragraph |
-
-### Bookmarks, sections & annotations
-
-| Tool | Description |
-|------|-------------|
-| `list_document_bookmarks` | List all bookmarks |
-| `resolve_document_bookmark` | Resolve bookmark to paragraph index |
-| `list_document_sections` | List named text sections |
-| `read_document_section` | Read a section's content |
-| `add_document_ai_summary` | Add AI annotation to a heading |
-| `get_document_ai_summaries` | List all AI annotations |
-| `remove_document_ai_summary` | Remove an AI annotation |
-
-### Live viewing
-
-| Tool | Description |
-|------|-------------|
-| `open_document_in_libreoffice` | Open in GUI |
-| `refresh_document_in_libreoffice` | Force refresh in GUI |
-| `create_live_editing_session` | Live editing session |
-| `watch_document_changes` | Monitor file changes |
+| Category | Examples |
+|----------|---------|
+| **Document** | `create_document`, `read_document_text`, `convert_document`, `open_document_in_libreoffice` |
+| **Navigation** | `get_document_tree` (heading tree + page numbers), `search_in_document`, `get_page_objects` |
+| **Editing** | `insert_text_at_paragraph`, `set_paragraph_text`, `replace_in_document` |
+| **Comments & review** | `list_comments`, `add_comment`, `resolve_comment`, track changes |
+| **Images & frames** | `insert_image`, `set_image_properties` (resize, crop, alt-text), `replace_image` |
+| **Tables** | `list_tables`, `read_table`, `write_table_cell`, `create_table` |
+| **Styles** | `list_styles`, `get_style_info` |
+| **Calc** | `read_spreadsheet_cells`, `write_spreadsheet_cell`, `list_sheets` |
+| **Impress** | `list_slides`, `read_slide`, `get_presentation_info` |
+| **Batch** | `batch_convert_documents`, `merge_text_documents` |
 
 ## Configuration
 
-The install scripts generate the Claude Desktop configuration automatically. To configure manually, add the MCP server entry to your config:
+The install scripts generate the Claude Desktop configuration automatically. To configure manually, add the MCP server entry to your config (use **absolute paths** for `args` — `cwd` may not be respected by all clients):
 
 - **Claude Desktop**: `~/.config/claude/claude_desktop_config.json` (Linux) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 - **Claude Code**: `.mcp.json` at the project root
@@ -181,7 +145,7 @@ The install scripts generate the Claude Desktop configuration automatically. To 
 
 ## Copyright
 
-This project is a major fork of [patrup/mcp-libre](https://github.com/patrup/mcp-libre), which provided the initial MCP server and headless LibreOffice integration. The current version has been extensively rewritten: embedded LibreOffice extension with UNO bridge, main-thread execution via AsyncCallback, context-efficient document navigation (heading tree, locators, bookmarks), comments/review workflow, track changes, styles, tables, images, document protection, and 59+ tools.
+This project is a major fork of [patrup/mcp-libre](https://github.com/patrup/mcp-libre), which provided the initial MCP server and headless LibreOffice integration. The current version has been extensively rewritten: embedded LibreOffice extension with UNO bridge, main-thread execution via AsyncCallback, context-efficient document navigation (heading tree, locators, bookmarks), comments/review workflow, track changes, styles, tables, images, document protection, and 67+ tools.
 
 ## License
 

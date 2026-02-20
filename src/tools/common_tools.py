@@ -15,8 +15,26 @@ from ..models import (
 )
 
 
+_AGENT_MD = Path(__file__).resolve().parent.parent.parent / "AGENT.md"
+
+
 def register(mcp, backend: DocumentBackend,
              call_plugin: Callable[[str, Dict[str, Any]], Dict[str, Any]]):
+
+    # ---------------------------------------------------------------
+    # Agent cheat sheet
+    # ---------------------------------------------------------------
+
+    @mcp.tool()
+    def get_agent_guide() -> str:
+        """Get the agent cheat sheet: quick rules, decision tree, locator guide, workflows, and do/don't table.
+
+        Call this first if you are unsure how to use the LibreOffice MCP tools.
+        """
+        try:
+            return _AGENT_MD.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return "AGENT.md not found. See https://github.com/quazardous/mcp-libre"
 
     # ---------------------------------------------------------------
     # Document CRUD (from document_tools)

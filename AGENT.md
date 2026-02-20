@@ -1,85 +1,83 @@
 # LibreOffice MCP — Agent Guide
 
-This MCP server gives you live access to LibreOffice documents.
-Follow these rules to keep your context window small and your calls fast.
+## Quick start
 
-## Core Principle: Drill Down, Never Dump
+1. **No save required** — all tools work on the in-memory document via UNO. Even a brand-new unsaved doc is fully accessible.
+2. **Always start with** `list_open_documents` — see what's open. No need to guess paths.
+3. **Drill down, never dump** — `get_document_tree(depth=1)` → `get_heading_children` → `read_paragraphs`. Never load a whole document.
+4. **Use bookmarks** (`bookmark:_mcp_*`) to remember positions — they survive edits. `paragraph:N` shifts after any insert/delete.
+5. **Search, don't scan** — `search_in_document` uses native LO search. Don't loop through paragraphs.
+6. **Find objects by page** — `get_page_objects(paragraph_index=N)` returns images/tables nearby. Don't use `list_images` on large docs.
+7. **Check comments** — the human may have left TODOs. Call `list_comments` early.
+8. **30s timeout** — UNO calls that exceed 30s return HTTP 504. Avoid `depth=0` or `content_strategy="full"` on large documents.
 
-Documents can have thousands of paragraphs. Never try to load everything.
-Navigate the heading tree like a filesystem: list, then open what you need.
-
-## Workflow
-
-### 1. Discover structure
-
-```
-get_document_tree(depth=1, content_strategy="first_lines")
-```
-
-Returns top-level headings with a one-line preview. This is your table of contents.
-For a 800-paragraph document, this returns ~10 items.
-
-### 2. Drill into a section
+## First call
 
 ```
-get_heading_children(locator="bookmark:_mcp_abc123", depth=1)
+What do I need?
+├── See what's open           → list_open_documents
+├── Understand a document     → get_document_tree(depth=1)
+├── Find specific text        → search_in_document(pattern="...")
+├── Read a section            → get_heading_children(locator="bookmark:...")
+│                               then read_paragraphs(locator="paragraph:N", count=10)
+├── Find images near text     → get_page_objects(paragraph_index=N)
+├── See human TODOs           → list_comments
+├── Open a file               → open_document(file_path="...")
+└── Full session example      → see "Typical Session" at the end of this guide
 ```
 
-Each heading comes with a stable `bookmark` — use it for navigation.
-Bookmarks survive document edits; paragraph indices don't.
-
-### 3. Read only what you need
+### Minimal session (5 calls)
 
 ```
-read_paragraphs(locator="paragraph:58", count=10)
+list_open_documents                                         # 1. what's open?
+get_document_tree(depth=1, content_strategy="first_lines")  # 2. table of contents + page numbers
+search_in_document(pattern="keyword")                       # 3. find what you need
+read_paragraphs(locator="paragraph:42", count=10)           # 4. read it
+set_paragraph_text(locator="paragraph:42", text="...")       # 5. edit it
 ```
-
-Read small batches. Default is 10 paragraphs. Increase only if you have a reason.
-
-### 4. Search instead of scanning
-
-```
-search_in_document(pattern="évaluation", max_results=5, context_paragraphs=1)
-```
-
-Find specific content without reading the whole document.
-Returns matches with surrounding paragraphs for context.
-
-## content_strategy
-
-Controls how much body text is returned alongside headings:
-
-| Value | What you get | When to use |
-|---|---|---|
-| `"none"` | Headings only | Navigating structure |
-| `"first_lines"` | Headings + first line of body | Default, good balance |
-| `"ai_summary_first"` | AI summaries if cached, else first lines | Repeated analysis |
-| `"full"` | Complete body text | Small sections only |
 
 ## Locators
 
-Locators are the preferred way to address content:
+All tools that take a `locator` parameter accept these formats:
 
-- `bookmark:_mcp_abc123` — stable across edits (best)
-- `heading:2.1` — heading by outline number
-- `paragraph:42` — by paragraph index (fragile after edits)
-- `page:3` — by page number
+| Locator | Example | What it targets | When to use |
+|---------|---------|-----------------|-------------|
+| `bookmark:` | `bookmark:_mcp_df3919e3` | The paragraph where this bookmark sits | **Default choice** — stable across edits |
+| `heading:` | `heading:2.1` | 2nd top heading → 1st child | Quick structural nav (breaks if headings are added/removed) |
+| `paragraph:` | `paragraph:42` | Paragraph at index 42 | Immediate use only — **do not store for later** |
+| `page:` | `page:3` | First paragraph on page 3 | Visual reference — approximate, shifts with reflow |
 
-Always prefer bookmarks when available.
+### Rules
 
-## Anti-Patterns
+- **After editing** (insert, delete, duplicate paragraphs): stored `paragraph:N` values are invalid. Re-resolve via `resolve_bookmark` or re-call `get_document_tree`.
+- **Bookmarks survive editing**: insert/delete paragraphs, edit text, resize images — the bookmark stays on its heading.
+- **Bookmarks are created automatically** by `get_document_tree` (one per heading, persisted in the .odt file).
+- **If a heading is deleted**, its bookmark becomes orphaned — `resolve_bookmark` will return an error. Call `get_document_tree` again to refresh.
+- **`page:N` is approximate** — reflow (text edits, image resize) changes page boundaries. Use it to jump to an area, not to target a precise paragraph.
+
+## content_strategy
+
+Controls body text in `get_document_tree` / `get_heading_children`:
+
+| Value | Returns | Use when |
+|---|---|---|
+| `"none"` | Headings only | Navigating structure |
+| `"first_lines"` | Headings + first line of body | **Default** — good balance |
+| `"ai_summary_first"` | AI summaries if cached, else first lines | Repeated analysis |
+| `"full"` | Complete body text | Small sections only — **avoid on large docs** |
+
+## Don't / Do
 
 | Don't | Do instead |
 |---|---|
 | `get_text_content_live` on big docs | `get_document_tree` + `read_paragraphs` |
-| `depth=0` on unknown docs | `depth=1`, then drill into sections |
+| `depth=0` on unknown docs | `depth=1`, then drill |
 | `content_strategy="full"` at depth > 1 | `"first_lines"`, then read specific paragraphs |
-| Read all paragraphs sequentially | `search_in_document` to find what you need |
-| Store paragraph indices for later | Store bookmarks — they survive edits |
-| Insert text then manually set style | Use `insert_at_paragraph` + `set_paragraph_style` |
-| Copy file manually to duplicate | Use `save_document_copy` |
-| Edit without tracking | Enable `set_track_changes(true)` before edits |
-| Ignore human comments | Read `list_comments`, act, then `resolve_comment` with reason |
+| Read all paragraphs in a loop | `search_in_document` |
+| Store `paragraph:N` for use after edits | Store the `bookmark` from `get_document_tree` |
+| `list_images` on a 50-page doc | `get_page_objects(page=N)` for the page you care about |
+| Edit without tracking | `set_track_changes(true)` first |
+| Ignore human comments | `list_comments` → act → `resolve_comment` |
 | Leave doc unprotected while working | `set_document_protection(true)` at start, `false` when done |
 
 ## Tool Reference
