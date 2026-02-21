@@ -9,7 +9,7 @@
 5. **Search, don't scan** — `search_in_document` uses native LO search. Don't loop through paragraphs.
 6. **Find objects by page** — `get_page_objects(paragraph_index=N)` returns images/tables nearby. Don't use `list_images` on large docs.
 7. **Check comments** — the human may have left TODOs. Call `list_comments` early.
-8. **30s timeout** — UNO calls that exceed 30s return HTTP 504. Avoid `depth=0` or `content_strategy="full"` on large documents.
+8. **60s timeout** — UNO calls that exceed 60s return HTTP 504. Avoid `depth=0` or `content_strategy="full"` on large documents.
 
 ## First call
 
@@ -73,7 +73,7 @@ Controls body text in `get_document_tree` / `get_heading_children`:
 | `insert_at_paragraph` then `set_paragraph_style` | `insert_at_paragraph(text="...", style="Text Body")` — one call |
 | Multiple `insert_at_paragraph` calls for a section | `insert_paragraphs_batch(paragraphs=[...])` — one call, no index drift |
 | Edit paragraphs inside Table of Contents | Editing indexes is blocked — use `refresh_indexes()` to update them |
-| `get_text_content_live` on big docs | `get_document_tree` + `read_paragraphs` |
+| Read the whole document into context | `get_document_tree` + `read_paragraphs` |
 | `depth=0` on unknown docs | `depth=1`, then drill |
 | `content_strategy="full"` at depth > 1 | `"first_lines"`, then read specific paragraphs |
 | Read all paragraphs in a loop | `search_in_document` |
@@ -165,7 +165,7 @@ Use `list_styles(family="ParagraphStyles")` to discover existing styles before a
 | Tool | What it does |
 |---|---|
 | `save_document` | Save active document |
-| `save_document_copy` | Save As / duplicate under a new name |
+| `save_document_as` | Save As / duplicate under a new name |
 | `refresh_indexes` | Refresh Table of Contents and other indexes |
 | `update_fields` | Refresh all fields (dates, page numbers, cross-refs) |
 | `get_document_properties` | Read metadata (title, author, subject, keywords) |
@@ -215,9 +215,9 @@ Crop: `crop_top_mm`, `crop_bottom_mm`, `crop_left_mm`, `crop_right_mm` — trims
 
 | Tool | What it does |
 |---|---|
-| `list_frames` | List all text frames (name, size, anchor, page, contained images) |
-| `get_frame_info` | Detailed info (size, position, wrap, caption text, images) |
-| `set_frame_properties` | Resize, reposition, change wrap/anchor, move to paragraph |
+| `list_text_frames` | List all text frames (name, size, anchor, page, contained images) |
+| `get_text_frame_info` | Detailed info (size, position, wrap, caption text, images) |
+| `set_text_frame_properties` | Resize, reposition, change wrap/anchor, move to paragraph |
 
 Frames are containers that hold images + caption text. To control image layout (e.g. align 3 images in a row), manipulate the frames, not the images directly.
 
@@ -413,7 +413,7 @@ get_page_objects(page=5) → 3 images, 2 frames, 1 table
 ## Performance Notes
 
 - All UNO calls run on the LibreOffice main thread (thread-safe via AsyncCallback).
-- Calls that take over 30 seconds will timeout (HTTP 504).
+- Calls that take over 60 seconds will timeout (HTTP 504).
 - Opening very large documents is the slowest operation — subsequent reads are fast.
 - `search_in_document` uses native LibreOffice search, not paragraph-by-paragraph scanning.
 - `refresh_indexes` and `update_fields` are fast even on large documents.

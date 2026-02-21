@@ -75,17 +75,16 @@ mkdir -p "$DEV_DIR"
 # registration.py -> root (UNO component entry point)
 cp "$PLUGIN_DIR/pythonpath/registration.py" "$DEV_DIR/"
 
-# pythonpath/ -- helper modules
-mkdir -p "$DEV_DIR/pythonpath"
-for f in uno_bridge.py mcp_server.py ai_interface.py main_thread_executor.py version.py; do
-    cp "$PLUGIN_DIR/pythonpath/$f" "$DEV_DIR/pythonpath/"
-done
+# pythonpath/ -- copy entire tree (services/, tools/, etc.)
+cp -r "$PLUGIN_DIR/pythonpath" "$DEV_DIR/pythonpath"
+# Remove __pycache__ dirs and registration.py (already copied to root)
+find "$DEV_DIR/pythonpath" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+rm -f "$DEV_DIR/pythonpath/registration.py"
 
-# Fix relative imports in all .py files
+# Fix relative imports in all .py files (recursive)
 fix_imports() {
     local dir="$1"
-    for pyfile in "$dir"/*.py; do
-        [ -f "$pyfile" ] || continue
+    while IFS= read -r -d '' pyfile; do
         local original
         original=$(cat "$pyfile")
         local content
@@ -97,10 +96,9 @@ fix_imports() {
         if [ "$content" != "$original" ]; then
             echo "    Fixed imports: $(basename "$pyfile")"
         fi
-    done
+    done < <(find "$dir" -name "*.py" -print0)
 }
 fix_imports "$DEV_DIR"
-fix_imports "$DEV_DIR/pythonpath"
 
 # AGENT.md (served by HTTP endpoint)
 cp "$PROJECT_ROOT/AGENT.md" "$DEV_DIR/"

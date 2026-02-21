@@ -85,27 +85,49 @@ def _make_callback_instance():
     from com.sun.star.awt import XCallback
 
     class _MainThreadCallback(unohelper.Base, XCallback):
-        """XCallback implementation that drains the work queue on notify()."""
+        """XCallback implementation that processes work items one at a time.
+
+        Processing ONE item per callback lets the VCL event loop handle
+        other events (redraws, user input) between tool executions.
+        """
 
         def notify(self, _ignored):
-            """Called by VCL on the main thread."""
-            while True:
-                try:
-                    item = _work_queue.get_nowait()
-                except queue.Empty:
-                    break
-                try:
-                    item.result = item.fn(*item.args, **item.kwargs)
-                except Exception as exc:
-                    item.exception = exc
-                finally:
-                    item.event.set()
+            """Called by VCL on the main thread — process ONE item."""
+            try:
+                item = _work_queue.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                item.result = item.fn(*item.args, **item.kwargs)
+            except Exception as exc:
+                item.exception = exc
+            finally:
+                item.event.set()
+            # Re-poke if more items waiting, so VCL processes GUI
+            # events between work items instead of batch-draining.
+            if not _work_queue.empty():
+                _poke_vcl()
 
     return _MainThreadCallback()
 
 
 # Singleton created lazily (needs UNO runtime available).
 _callback_instance = None
+
+
+def _poke_vcl():
+    """Ask the VCL event loop to call our notify() callback."""
+    if _async_callback_service is None or _callback_instance is None:
+        return
+    try:
+        import uno
+        _async_callback_service.addCallback(
+            _callback_instance, uno.Any("void", None))
+    except Exception:
+        try:
+            _async_callback_service.addCallback(_callback_instance, None)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -130,14 +152,7 @@ def execute_on_main_thread(fn: Callable, *args,
 
     item = _WorkItem(fn, args, kwargs)
     _work_queue.put(item)
-
-    # Poke the VCL event loop so it calls our notify().
-    try:
-        import uno
-        svc.addCallback(_callback_instance, uno.Any("void", None))
-    except Exception:
-        # If addCallback itself fails, still try with a plain None
-        svc.addCallback(_callback_instance, None)
+    _poke_vcl()
 
     if not item.event.wait(timeout):
         raise TimeoutError(

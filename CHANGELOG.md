@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.0.0] - 2026-02-21
+
+### Changed
+- **Architecture rewrite**: monolithic `uno_bridge.py` (4300 lines) + `mcp_server.py` (1830 lines) replaced by domain services (`services/`) and auto-discovered tool classes (`tools/`)
+- One class per MCP tool with self-describing JSON Schema — no manual handler registration
+- `ServiceRegistry` container injects shared UNO helpers into all tools
+- `WriterService` split into sub-modules: `tree.py`, `paragraphs.py`, `search.py`, `structural.py`
+- `mcp_server.py` reduced from 1830 to 70 lines (auto-discovery + dispatch)
+- Build scripts updated for recursive `services/` and `tools/` sub-packages
+
+### Added
+- **Backpressure**: `Semaphore(1)` in `ai_interface.py` — one tool call at a time, 5s wait timeout, polite "busy" response to concurrent requests
+- `insert_paragraphs_batch` tool — insert multiple paragraphs in a single UNO transaction
+- `style` parameter on `insert_text_at_paragraph` — set paragraph style on insert
+
+### Removed
+- `uno_bridge.py` — all code extracted to `services/`
+- `libremcp.py` — dead stub from old architecture
+- `tests/` — imported from deleted `src/`
+- Legacy `*_live` tool handlers
+- `src/` entry point and `pyproject.toml` script/package references
+
 ## [1.4.0] - 2026-02-20
 
 ### Added

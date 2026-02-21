@@ -182,35 +182,21 @@ Monitors a document for changes and reports them.
 "Read the current content of my document"
 ```
 
-## 🎮 Demo and Testing
+## Testing
 
-### Run the Live Viewing Demo
+### Quick health check
 ```bash
-# Comprehensive demonstration
-uv run python demo_live_viewing.py
-
-# Quick test of live features
-./mcp-helper.sh demo
+curl http://localhost:8765/health
 ```
 
-### Test Individual Features
-```bash
-# Test document opening
-uv run python -c "
-from libremcp import open_document_in_libreoffice
-result = open_document_in_libreoffice('/path/to/test.odt')
-print(result)
-"
+### Test via MCP tools
+All live viewing tools are available as MCP tools. Use them from Claude Desktop, Claude Code, or any MCP client:
+- `open_document_in_libreoffice` — open a document in the GUI
+- `create_live_editing_session` — open with auto-refresh
+- `watch_document_changes` — monitor for changes
+- `refresh_document_in_libreoffice` — force reload
 
-# Test change monitoring
-uv run python -c "
-from libremcp import watch_document_changes  
-result = watch_document_changes('/path/to/test.odt', 10)
-print(result)
-"
-```
-
-## ⚙️ Configuration Options
+## Configuration Options
 
 ### LibreOffice Settings
 For optimal live viewing experience:

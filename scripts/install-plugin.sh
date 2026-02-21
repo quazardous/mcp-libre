@@ -99,9 +99,9 @@ ensure_lo_stopped() {
 # ── Fix Python imports ───────────────────────────────────────────────────────
 
 fix_python_imports() {
+    # Recursively fix relative imports in all .py files under $dir
     local dir="$1"
-    for pyfile in "$dir"/*.py; do
-        [ -f "$pyfile" ] || continue
+    while IFS= read -r -d '' pyfile; do
         local original
         original=$(cat "$pyfile")
         local content
@@ -114,7 +114,7 @@ fix_python_imports() {
         if [ "$content" != "$original" ]; then
             echo "    Fixed imports in $(basename "$pyfile")"
         fi
-    done
+    done < <(find "$dir" -name "*.py" -print0)
 }
 
 # ── Build .oxt ───────────────────────────────────────────────────────────────
@@ -127,10 +127,14 @@ build_oxt() {
     # Validate source files exist
     local required_files=(
         "pythonpath/registration.py"
-        "pythonpath/uno_bridge.py"
         "pythonpath/mcp_server.py"
         "pythonpath/ai_interface.py"
+        "pythonpath/main_thread_executor.py"
         "pythonpath/version.py"
+        "pythonpath/services/__init__.py"
+        "pythonpath/services/base.py"
+        "pythonpath/tools/__init__.py"
+        "pythonpath/tools/base.py"
         "Addons.xcu"
         "ProtocolHandler.xcu"
         "MCPServerConfig.xcs"
@@ -160,17 +164,17 @@ build_oxt() {
     rm -f "$OXT_FILE"
     mkdir -p "$STAGING_DIR"
 
-    # pythonpath/ -- helper modules
+    # pythonpath/ -- copy entire tree (LO adds this dir to sys.path)
     echo "[*] Copying plugin files to staging..."
-    mkdir -p "$STAGING_DIR/pythonpath"
-    for f in uno_bridge.py mcp_server.py ai_interface.py version.py; do
-        cp "$PLUGIN_DIR/pythonpath/$f" "$STAGING_DIR/pythonpath/"
-    done
+    cp -r "$PLUGIN_DIR/pythonpath" "$STAGING_DIR/pythonpath"
+    # Remove __pycache__ dirs and registration.py (goes to root)
+    find "$STAGING_DIR/pythonpath" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    rm -f "$STAGING_DIR/pythonpath/registration.py"
 
     # registration.py -> extension root
     cp "$PLUGIN_DIR/pythonpath/registration.py" "$STAGING_DIR/"
 
-    # Fix relative imports
+    # Fix relative imports (recursive)
     echo "[*] Fixing Python imports for LibreOffice extension structure..."
     fix_python_imports "$STAGING_DIR/pythonpath"
     fix_python_imports "$STAGING_DIR"

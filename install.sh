@@ -379,13 +379,6 @@ verify_setup() {
         all_ok=false
     fi
 
-    write_step "Testing MCP server import..."
-    if (cd "$PROJECT_ROOT" && uv run python -c "from src.server import mcp; print('MCP server OK')" 2>&1 | grep -q "MCP server OK"); then
-        write_ok "MCP server module loads correctly"
-    else
-        write_warn "MCP server import issue"
-    fi
-
     echo ""
     if $all_ok; then
         write_ok "All required dependencies are installed and configured!"

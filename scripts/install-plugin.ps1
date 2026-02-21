@@ -280,15 +280,16 @@ function Invoke-Unopkg {
 function Fix-PythonImports {
     <#
     .SYNOPSIS
-        Convert relative imports to absolute in staged .py files.
+        Convert relative imports to absolute in staged .py files (recursive).
         LibreOffice adds pythonpath/ to sys.path directly, so
         "from .mcp_server import X" must become "from mcp_server import X".
         Re-writes all files as UTF-8 without BOM (LO Python chokes on BOM).
     #>
     param([string]$Directory)
 
-    Get-ChildItem $Directory -Filter "*.py" | ForEach-Object {
+    Get-ChildItem $Directory -Filter "*.py" -Recurse | ForEach-Object {
         $content = Get-Content $_.FullName -Raw -Encoding UTF8
+        if (-not $content) { return }
         # Strip BOM if present in source
         $content = $content -replace '^\xEF\xBB\xBF', ''
         $content = $content.TrimStart([char]0xFEFF)
@@ -315,10 +316,14 @@ function Build-Oxt {
     # Validate source files exist
     $requiredFiles = @(
         "pythonpath\registration.py",
-        "pythonpath\uno_bridge.py",
         "pythonpath\mcp_server.py",
         "pythonpath\ai_interface.py",
+        "pythonpath\main_thread_executor.py",
         "pythonpath\version.py",
+        "pythonpath\services\__init__.py",
+        "pythonpath\services\base.py",
+        "pythonpath\tools\__init__.py",
+        "pythonpath\tools\base.py",
         "Addons.xcu",
         "ProtocolHandler.xcu",
         "MCPServerConfig.xcs",
@@ -344,18 +349,19 @@ function Build-Oxt {
     # ── Copy plugin sources ──────────────────────────────────────────────
     Write-Step "Copying plugin files to staging..."
 
-    # pythonpath/ — helper modules (LO adds this dir to sys.path)
+    # pythonpath/ — copy entire tree (LO adds this dir to sys.path)
     $stagePy = Join-Path $StagingDir "pythonpath"
-    New-Item -ItemType Directory -Path $stagePy -Force | Out-Null
-
-    foreach ($f in @("uno_bridge.py", "mcp_server.py", "ai_interface.py", "version.py")) {
-        Copy-Item (Join-Path $PluginDir "pythonpath\$f") $stagePy
-    }
+    Copy-Item (Join-Path $PluginDir "pythonpath") $stagePy -Recurse
+    # Remove __pycache__ dirs and registration.py (goes to root)
+    Get-ChildItem $stagePy -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+    $stageReg = Join-Path $stagePy "registration.py"
+    if (Test-Path $stageReg) { Remove-Item $stageReg -Force }
 
     # registration.py → extension root (UNO component entry point)
     Copy-Item (Join-Path $PluginDir "pythonpath\registration.py") $StagingDir
 
-    # Fix relative imports → absolute in all staged .py files
+    # Fix relative imports → absolute in all staged .py files (recursive)
     Write-Step "Fixing Python imports for LibreOffice extension structure..."
     Fix-PythonImports $stagePy
     Fix-PythonImports $StagingDir

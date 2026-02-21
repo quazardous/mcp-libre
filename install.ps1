@@ -568,22 +568,6 @@ function Test-Setup {
         $allOk = $false
     }
 
-    # MCP server quick test
-    Write-Step "Testing MCP server import..."
-    Push-Location $Script:ProjectRoot
-    try {
-        $testResult = & uv run python -c "from src.libremcp import mcp; print('MCP server OK')" 2>&1
-        if ($testResult -match "MCP server OK") {
-            Write-OK "MCP server module loads correctly"
-        } else {
-            Write-Warn "MCP server import issue: $testResult"
-        }
-    } catch {
-        Write-Warn "Could not test MCP server: $_"
-    } finally {
-        Pop-Location
-    }
-
     # Summary
     Write-Host ""
     if ($allOk) {

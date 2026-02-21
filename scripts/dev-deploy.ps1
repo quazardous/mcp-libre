@@ -73,16 +73,19 @@ New-Item -ItemType Directory -Path $DevDir -Force | Out-Null
 # registration.py → root (UNO component entry point)
 Copy-Item (Join-Path $PluginDir "pythonpath\registration.py") $DevDir
 
-# pythonpath/ — helper modules
+# pythonpath/ — copy entire tree (services/, tools/, etc.)
 $devPy = Join-Path $DevDir "pythonpath"
-New-Item -ItemType Directory -Path $devPy -Force | Out-Null
-foreach ($f in @("uno_bridge.py", "mcp_server.py", "ai_interface.py", "main_thread_executor.py", "version.py")) {
-    Copy-Item (Join-Path $PluginDir "pythonpath\$f") $devPy
-}
+Copy-Item (Join-Path $PluginDir "pythonpath") $devPy -Recurse
+# Remove __pycache__ dirs and registration.py (already copied to root)
+Get-ChildItem $devPy -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item $_.FullName -Recurse -Force }
+$devReg = Join-Path $devPy "registration.py"
+if (Test-Path $devReg) { Remove-Item $devReg -Force }
 
-# Fix relative imports in all .py files
+# Fix relative imports in all .py files (recursive)
 Get-ChildItem $DevDir -Filter "*.py" -Recurse | ForEach-Object {
     $content = Get-Content $_.FullName -Raw -Encoding UTF8
+    if (-not $content) { return }
     $content = $content -replace '^\xEF\xBB\xBF', ''
     $content = $content.TrimStart([char]0xFEFF)
     $original = $content

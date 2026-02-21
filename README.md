@@ -32,30 +32,9 @@ The install scripts check/install all dependencies (Python 3.12+, LibreOffice, U
 
 Options: `--check-only` (status only), `--skip-optional` (skip Node.js/Java), `--plugin` (build + install extension).
 
-## Modes
-
-### Headless mode (default)
-
-The MCP server launches LibreOffice in headless mode for each operation. No GUI needed.
-
-```
-MCP_LIBREOFFICE_GUI=0
-```
-
-### GUI mode (recommended)
-
-The MCP server delegates to a LibreOffice extension running inside an open LibreOffice instance. Real-time, faster, and you see changes live.
-
-```
-MCP_LIBREOFFICE_GUI=1
-MCP_PLUGIN_URL=http://localhost:8765
-```
-
-Requires the LibreOffice extension installed (see below).
-
 ## LibreOffice Extension
 
-The extension embeds an HTTP API server inside LibreOffice (port 8765) with direct UNO API access.
+The extension embeds an MCP server inside LibreOffice (port 8765) with direct UNO API access. All document operations run on LibreOffice's main thread for full fidelity.
 
 ### Install
 
@@ -92,48 +71,23 @@ The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restar
 
 ## Configuration
 
-The install scripts generate the Claude Desktop configuration automatically. To configure manually, add the MCP server entry to your config (use **absolute paths** for `args` — `cwd` may not be respected by all clients):
+The extension runs an HTTP server on port 8765 inside LibreOffice. Configure your MCP client to connect to it:
 
 - **Claude Desktop**: `~/.config/claude/claude_desktop_config.json` (Linux) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
 - **Claude Code**: `.mcp.json` at the project root
 
-**Linux:**
-
 ```json
 {
   "mcpServers": {
     "libreoffice": {
-      "command": "/home/you/.local/bin/uv",
-      "args": ["run", "python", "src/main.py"],
-      "cwd": "/home/you/mcp-libre",
-      "env": {
-        "PYTHONPATH": "/home/you/mcp-libre/src",
-        "MCP_LIBREOFFICE_GUI": "1",
-        "MCP_PLUGIN_URL": "http://localhost:8765"
-      }
+      "type": "http",
+      "url": "http://localhost:8765/mcp"
     }
   }
 }
 ```
 
-**Windows:**
-
-```json
-{
-  "mcpServers": {
-    "libreoffice": {
-      "command": "C:/Users/you/.local/bin/uv.exe",
-      "args": ["run", "python", "src/main.py"],
-      "cwd": "C:/Users/you/mcp-libre",
-      "env": {
-        "PYTHONPATH": "C:/Users/you/mcp-libre/src",
-        "MCP_LIBREOFFICE_GUI": "1",
-        "MCP_PLUGIN_URL": "http://localhost:8765"
-      }
-    }
-  }
-}
-```
+See [config/claude_code.json.template](config/claude_code.json.template) and [config/claude_desktop.json.template](config/claude_desktop.json.template) for ready-to-use templates.
 
 ## Documentation
 

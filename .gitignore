@@ -106,3 +106,4 @@ mcp_test_*
 temp_documents/
 .claude/settings.local.json
 .mcp.json
+.claude/settings.json
