@@ -2,57 +2,48 @@
 
 MCP server that lets AI assistants create, read, convert and edit LibreOffice documents in real-time.
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![LibreOffice](https://img.shields.io/badge/LibreOffice-24.2+-green.svg)](https://www.libreoffice.org/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2024--11--05-orange.svg)](https://spec.modelcontextprotocol.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Requirements
+## How it works
 
-- **LibreOffice** 24.2+
-- **Python** 3.12+
-- **UV** package manager
+A LibreOffice extension runs an MCP server directly inside LibreOffice (port 8765). Your AI assistant connects to it and can manipulate documents in real-time — you see changes live in the LibreOffice window.
 
-See [docs/prerequisites.md](docs/prerequisites.md) for install commands per platform.
+## Quick start
 
-## Installation
+1. **Install LibreOffice** 24.2+ if not already installed
+2. **Install the extension** — download the `.oxt` file from [Releases](https://github.com/quazardous/mcp-libre/releases) and double-click it (or drag it into LibreOffice)
+3. **Restart LibreOffice** — an "MCP Server" menu appears, the server starts automatically
+4. **Configure your MCP client** — add this to your config:
 
-```bash
-git clone https://github.com/quazardous/mcp-libre/
-cd mcp-libre
-uv sync
+**Claude Desktop** (`~/.config/claude/claude_desktop_config.json` or `%APPDATA%\Claude\claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "libreoffice": {
+      "type": "http",
+      "url": "http://localhost:8765/mcp"
+    }
+  }
+}
 ```
 
-The install scripts check/install all dependencies (Python 3.12+, LibreOffice, UV) and generate the Claude Desktop configuration automatically:
+**Claude Code** (`.mcp.json` at the project root):
 
-| Platform | Command | Details |
-|----------|---------|---------|
-| **Linux** | `./install.sh` | Supports apt, dnf, pacman, zypper, brew |
-| **Windows** | `.\install.ps1` | See [docs/windows-setup.md](docs/windows-setup.md) |
+```json
+{
+  "mcpServers": {
+    "libreoffice": {
+      "type": "http",
+      "url": "http://localhost:8765/mcp"
+    }
+  }
+}
+```
 
-Options: `--check-only` (status only), `--skip-optional` (skip Node.js/Java), `--plugin` (build + install extension).
-
-## LibreOffice Extension
-
-The extension embeds an MCP server inside LibreOffice (port 8765) with direct UNO API access. All document operations run on LibreOffice's main thread for full fidelity.
-
-### Install
-
-| Platform | Command |
-|----------|---------|
-| **Linux** | `./install.sh --plugin` |
-| **Windows** | `.\install.ps1 -Plugin` |
-
-### Dev workflow
-
-| Platform | Command |
-|----------|---------|
-| **Linux** | `./scripts/dev-deploy.sh` |
-| **Windows** | `.\scripts\dev-deploy.ps1` |
-
-Then restart LibreOffice to pick up changes.
-
-The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restart, Status, and About.
+That's it. Open a document in LibreOffice, then ask Claude to edit it.
 
 ## Tools (67+)
 
@@ -69,37 +60,34 @@ The extension adds an **MCP Server** menu in LibreOffice with Start/Stop, Restar
 | **Impress** | `list_slides`, `read_slide`, `get_presentation_info` |
 | **Batch** | `batch_convert_documents`, `merge_text_documents` |
 
-## Configuration
+## Development
 
-The extension runs an HTTP server on port 8765 inside LibreOffice. Configure your MCP client to connect to it:
+If you want to modify the extension or contribute, clone the repo and use the dev scripts:
 
-- **Claude Desktop**: `~/.config/claude/claude_desktop_config.json` (Linux) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
-- **Claude Code**: `.mcp.json` at the project root
-
-```json
-{
-  "mcpServers": {
-    "libreoffice": {
-      "type": "http",
-      "url": "http://localhost:8765/mcp"
-    }
-  }
-}
+```bash
+git clone https://github.com/quazardous/mcp-libre/
+cd mcp-libre
 ```
 
-See [config/claude_code.json.template](config/claude_code.json.template) and [config/claude_desktop.json.template](config/claude_desktop.json.template) for ready-to-use templates.
+| Platform | Build & install | Dev hot-deploy |
+|----------|----------------|----------------|
+| **Linux** | `./scripts/install-plugin.sh` | `./scripts/dev-deploy.sh` |
+| **Windows** | `.\scripts\install-plugin.ps1` | `.\scripts\dev-deploy.ps1` |
+
+Dev-deploy syncs your changes to LibreOffice without rebuilding the `.oxt` — just restart LibreOffice to test.
+
+See [DEVEL.md](DEVEL.md) for architecture, adding new tools, and known pitfalls.
 
 ## Documentation
 
-- [Prerequisites](docs/prerequisites.md)
-- [Windows Setup](docs/windows-setup.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Live Viewing](docs/live-viewing.md)
+- [Windows Setup](docs/windows-setup.md)
 - [Changelog](CHANGELOG.md)
 
 ## Copyright
 
-This project is a major fork of [patrup/mcp-libre](https://github.com/patrup/mcp-libre), which provided the initial MCP server and headless LibreOffice integration. The current version has been extensively rewritten: embedded LibreOffice extension with UNO bridge, main-thread execution via AsyncCallback, context-efficient document navigation (heading tree, locators, bookmarks), comments/review workflow, track changes, styles, tables, images, document protection, and 67+ tools.
+This project is a major fork of [patrup/mcp-libre](https://github.com/patrup/mcp-libre), which provided the initial MCP server and headless LibreOffice integration. The current version has been extensively rewritten with an embedded LibreOffice extension, 67+ tools, and real-time document editing.
 
 ## License
 

@@ -436,7 +436,12 @@ function Build-Oxt {
     # ── Create .oxt (ZIP) ────────────────────────────────────────────────
     Write-Step "Creating .oxt package..."
     New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
-    Compress-Archive -Path "$StagingDir\*" -DestinationPath $OxtFile -Force
+    # Compress-Archive only supports .zip — create as .zip then rename
+    $ZipFile = [System.IO.Path]::ChangeExtension($OxtFile, ".zip")
+    if (Test-Path $ZipFile) { Remove-Item $ZipFile -Force }
+    if (Test-Path $OxtFile) { Remove-Item $OxtFile -Force }
+    Compress-Archive -Path "$StagingDir\*" -DestinationPath $ZipFile -Force
+    Rename-Item $ZipFile $OxtFile
 
     if (Test-Path $OxtFile) {
         $size = (Get-Item $OxtFile).Length
