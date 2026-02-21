@@ -57,6 +57,7 @@ _DEFAULT_CONFIG = {
     "autostart": True,
     "port": 8765,
     "host": "localhost",
+    "enable_ssl": True,
 }
 
 
@@ -77,6 +78,10 @@ def _read_lo_config():
             "port": int(access.getPropertyValue("Port")),
             "host": str(access.getPropertyValue("Host")),
         }
+        try:
+            cfg["enable_ssl"] = bool(access.getPropertyValue("EnableSSL"))
+        except Exception:
+            cfg["enable_ssl"] = True  # default when schema not yet updated
         access.dispose()
         logger.info(f"Config loaded from LO registry: {cfg}")
         return cfg
@@ -102,7 +107,8 @@ def _write_lo_config(values):
         update = provider.createInstanceWithArguments(
             "com.sun.star.configuration.ConfigurationUpdateAccess", (node_arg,))
         # Map our keys to LO property names
-        key_map = {"autostart": "AutoStart", "port": "Port", "host": "Host"}
+        key_map = {"autostart": "AutoStart", "port": "Port", "host": "Host",
+                   "enable_ssl": "EnableSSL"}
         for key, value in values.items():
             lo_key = key_map.get(key)
             if lo_key:
@@ -123,16 +129,28 @@ def _load_config():
 
 
 _config = _load_config()
-logger.info(f"Config: autostart={_config['autostart']}, port={_config['port']}")
+logger.info(f"Config: autostart={_config['autostart']}, port={_config['port']}, ssl={_config.get('enable_ssl', True)}")
 
 # ── Port / zombie management ─────────────────────────────────────────────────
 
 
 def _probe_health(host, port, timeout=2):
-    """Probe the HTTP health endpoint. Returns True if OUR server responds."""
+    """Probe the health endpoint. Returns True if OUR server responds.
+
+    Tries HTTPS first (default), falls back to HTTP.
+    """
     try:
         import http.client
-        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        import ssl
+        use_ssl = _config.get("enable_ssl", True)
+        if use_ssl:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            conn = http.client.HTTPSConnection(
+                host, port, timeout=timeout, context=ctx)
+        else:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
         conn.request("GET", "/health")
         resp = conn.getresponse()
         body = resp.read().decode("utf-8", errors="replace")
@@ -420,12 +438,15 @@ def _start_mcp_server():
         from ai_interface import start_ai_interface
         from mcp_server import get_mcp_server
 
+        use_ssl = _config.get("enable_ssl", True)
         _mcp_state["mcp_server"] = get_mcp_server()
-        _mcp_state["ai_interface"] = start_ai_interface(port=port, host=host)
+        _mcp_state["ai_interface"] = start_ai_interface(
+            port=port, host=host, use_ssl=use_ssl)
         _mcp_state["started"] = True
         _write_pid_file()
         _set_server_state(_STATE_RUNNING)
-        logger.info(f"MCP Extension started -- http://{host}:{port}")
+        scheme = "https" if use_ssl else "http"
+        logger.info(f"MCP Extension started -- {scheme}://{host}:{port}")
     except Exception as e:
         _set_server_state(_STATE_STOPPED)
         logger.error(f"Failed to start MCP server: {e}")
@@ -577,8 +598,9 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             _start_mcp_server()
             host = _config.get("host", "localhost")
             port = _config.get("port", 8765)
+            scheme = "https" if _config.get("enable_ssl", True) else "http"
             _msgbox(self.ctx, "MCP Server",
-                    f"MCP server started.\nhttp://{host}:{port}")
+                    f"MCP server started.\n{scheme}://{host}:{port}")
         except Exception as e:
             _msgbox(self.ctx, "MCP Error", f"Failed to start:\n{e}")
 
@@ -673,7 +695,8 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                         f"Health check: {health}",
                     ]
                     if mem_state and http_ok:
-                        lines.append(f"URL: http://{host}:{port}/health")
+                        scheme = "https" if _config.get("enable_ssl", True) else "http"
+                        lines.append(f"URL: {scheme}://{host}:{port}/health")
                     try:
                         dlg_model.getByName("StatusText").Label = "\n".join(lines)
                     except Exception:
@@ -764,8 +787,11 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
                 1 if cfg["autostart"] else 0)
             xWindow.getControl("HostField").setText(cfg["host"])
             xWindow.getControl("PortField").setValue(float(cfg["port"]))
+            xWindow.getControl("SSLCheck").setState(
+                1 if cfg.get("enable_ssl", True) else 0)
+            scheme = "https" if cfg.get("enable_ssl", True) else "http"
             xWindow.getControl("UrlText").setText(
-                f"Health check: http://{cfg['host']}:{cfg['port']}/health")
+                f"Health check: {scheme}://{cfg['host']}:{cfg['port']}/health")
         except Exception as e:
             logger.error(f"Options load error: {e}")
             logger.error(traceback.format_exc())
@@ -776,16 +802,19 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
                 "autostart": xWindow.getControl("AutoStartCheck").getState() == 1,
                 "port": int(xWindow.getControl("PortField").getValue()),
                 "host": xWindow.getControl("HostField").getText(),
+                "enable_ssl": xWindow.getControl("SSLCheck").getState() == 1,
             }
             logger.info(f"Options: saving {new_values}")
 
-            # Detect if server needs restart (port or host changed)
+            # Detect if server needs restart (port, host, or SSL changed)
             old_port = _config.get("port", 8765)
             old_host = _config.get("host", "localhost")
+            old_ssl = _config.get("enable_ssl", True)
             needs_restart = (
                 _mcp_state["started"]
                 and (new_values["port"] != old_port
-                     or new_values["host"] != old_host)
+                     or new_values["host"] != old_host
+                     or new_values["enable_ssl"] != old_ssl)
             )
 
             _write_lo_config(new_values)
@@ -881,3 +910,24 @@ g_ImplementationHelper.addImplementation(
 )
 
 logger.info("g_ImplementationHelper configured (3 services)")
+
+# ── Module-level auto-start (fallback) ───────────────────────────────────────
+# OnStartApp fires before extensions load, so the Jobs.xcu-based auto-start
+# often misses the event.  This fallback ensures the server starts when
+# registration.py is loaded by the runtime (second load).
+# The first load (UNO registration in unopkg) creates a daemon thread that
+# dies silently when the process exits — harmless.
+
+def _module_autostart():
+    """Delayed auto-start: wait for LO to be ready, then start if needed."""
+    import time
+    time.sleep(3)
+    if _config.get("autostart", True) and not _mcp_state["started"]:
+        logger.info("Module-level auto-start (fallback)")
+        try:
+            _start_mcp_server()
+        except Exception as e:
+            logger.error("Module-level auto-start failed: %s", e)
+
+threading.Thread(target=_module_autostart, daemon=True,
+                 name="mcp-module-autostart").start()

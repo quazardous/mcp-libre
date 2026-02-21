@@ -17,7 +17,7 @@
 ```powershell
 .\scripts\dev-deploy.ps1     # sync plugin/ → build/dev/ + junction into LO extensions
 # restart LibreOffice
-curl http://localhost:8765/health
+curl -k https://localhost:8765/health
 ```
 
 ## Logs

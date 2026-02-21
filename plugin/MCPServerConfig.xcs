@@ -43,6 +43,12 @@
         </info>
         <value>localhost</value>
       </prop>
+      <prop oor:name="EnableSSL" oor:type="xs:boolean" oor:nillable="false">
+        <info>
+          <desc>Enable HTTPS (TLS) for the MCP server.</desc>
+        </info>
+        <value>true</value>
+      </prop>
     </group>
   </component>
 </oor:component-schema>

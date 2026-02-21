@@ -377,13 +377,16 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
 class AIInterface:
     """Threaded HTTP server hosting the MCP protocol."""
 
-    def __init__(self, port: int = 8765, host: str = "localhost"):
+    def __init__(self, port: int = 8765, host: str = "localhost",
+                 use_ssl: bool = True):
         self.port = port
         self.host = host
+        self.use_ssl = use_ssl
         self.server = None
         self.server_thread = None
         self.running = False
-        logger.info("AI Interface initialized for %s:%s", host, port)
+        logger.info("AI Interface initialized for %s:%s (ssl=%s)",
+                     host, port, use_ssl)
 
     def start(self):
         try:
@@ -395,18 +398,29 @@ class AIInterface:
 
             self.server = _ThreadedHTTPServer(
                 (self.host, self.port), MCPRequestHandler)
+
+            if self.use_ssl:
+                from .ssl_certs import ensure_certs, create_ssl_context
+                cert_path, key_path = ensure_certs()
+                ssl_ctx = create_ssl_context(cert_path, key_path)
+                self.server.socket = ssl_ctx.wrap_socket(
+                    self.server.socket, server_side=True)
+                logger.info("TLS enabled with cert %s", cert_path)
+
             self.running = True
 
-            logger.info("Started MCP HTTP server on %s:%s",
-                        self.host, self.port)
+            scheme = "https" if self.use_ssl else "http"
+            logger.info("Started MCP %s server on %s:%s",
+                        scheme.upper(), self.host, self.port)
 
             self.server_thread = threading.Thread(
                 target=self._run_server, daemon=True)
             self.server_thread.start()
 
-            logger.info("MCP HTTP server ready — "
-                        "MCP endpoint: http://%s:%s/mcp",
-                        self.host, self.port)
+            scheme = "https" if self.use_ssl else "http"
+            logger.info("MCP %s server ready - "
+                        "MCP endpoint: %s://%s:%s/mcp",
+                        scheme.upper(), scheme, self.host, self.port)
 
         except OSError as e:
             logger.error("Failed to bind %s:%s: %s",
@@ -443,11 +457,13 @@ class AIInterface:
         return self.running
 
     def get_status(self) -> Dict[str, Any]:
+        scheme = "https" if self.use_ssl else "http"
         return {
             "running": self.running,
             "host": self.host,
             "port": self.port,
-            "mcp_url": f"http://{self.host}:{self.port}/mcp",
+            "ssl": self.use_ssl,
+            "mcp_url": f"{scheme}://{self.host}:{self.port}/mcp",
             "thread_alive": (self.server_thread.is_alive()
                              if self.server_thread else False),
         }
@@ -460,15 +476,17 @@ class AIInterface:
 ai_interface = None
 
 def get_ai_interface(port: int = 8765,
-                     host: str = "localhost") -> AIInterface:
+                     host: str = "localhost",
+                     use_ssl: bool = True) -> AIInterface:
     global ai_interface
     if ai_interface is None:
-        ai_interface = AIInterface(port, host)
+        ai_interface = AIInterface(port, host, use_ssl=use_ssl)
     return ai_interface
 
 def start_ai_interface(port: int = 8765,
-                       host: str = "localhost") -> AIInterface:
-    interface = get_ai_interface(port, host)
+                       host: str = "localhost",
+                       use_ssl: bool = True) -> AIInterface:
+    interface = get_ai_interface(port, host, use_ssl=use_ssl)
     if not interface.is_running():
         interface.start()
     return interface

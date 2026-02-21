@@ -153,6 +153,7 @@ build_oxt() {
         "MCPServerConfig.xcs"
         "MCPServerConfig.xcu"
         "OptionsDialog.xcu"
+        "Jobs.xcu"
         "dialogs/MCPSettings.xdl"
         "icons/stopped_16.png"
         "icons/running_16.png"
@@ -204,6 +205,7 @@ build_oxt() {
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="Addons.xcu"/>
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="ProtocolHandler.xcu"/>
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="OptionsDialog.xcu"/>
+    <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="Jobs.xcu"/>
 </manifest:manifest>
 MANIFEST_EOF
     echo "    manifest.xml generated"
@@ -376,5 +378,5 @@ echo ""
 echo "  Next steps:"
 echo "  1. Open a document in LibreOffice"
 echo "  2. MCP Server > Start MCP Server  (in the menu bar)"
-echo "  3. Test: curl http://localhost:8765/health"
+echo "  3. Test: curl -k https://localhost:8765/health"
 echo ""

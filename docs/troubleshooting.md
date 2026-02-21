@@ -11,7 +11,7 @@
 
 ## Server Not Responding
 
-**Symptom**: `curl http://localhost:8765/health` fails or times out.
+**Symptom**: `curl -k https://localhost:8765/health` fails or times out.
 
 **Solutions**:
 1. Start the server from the LibreOffice menu: `MCP Server > Start/Stop`

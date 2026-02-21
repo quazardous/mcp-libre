@@ -53,25 +53,33 @@
                       dlg:value-max="65535"
                       dlg:value="8765"/>
 
+    <!-- SSL checkbox -->
+    <dlg:checkbox dlg:id="SSLCheck"
+                  dlg:tab-index="6"
+                  dlg:left="12" dlg:top="78"
+                  dlg:width="200" dlg:height="12"
+                  dlg:value="Enable HTTPS (TLS with auto-generated certificate)"
+                  dlg:checked="true"/>
+
     <!-- Info section -->
     <dlg:fixedline dlg:id="InfoLine"
-                   dlg:tab-index="6"
-                   dlg:left="6" dlg:top="82"
+                   dlg:tab-index="7"
+                   dlg:left="6" dlg:top="96"
                    dlg:width="248" dlg:height="8"
                    dlg:value="Information"/>
 
     <dlg:text dlg:id="InfoText"
-              dlg:tab-index="7"
-              dlg:left="12" dlg:top="96"
+              dlg:tab-index="8"
+              dlg:left="12" dlg:top="110"
               dlg:width="240" dlg:height="30"
               dlg:multiline="true"
-              dlg:value="The MCP server exposes LibreOffice document tools via HTTP for AI assistants. Changes take effect after restarting the server."/>
+              dlg:value="The MCP server exposes LibreOffice document tools for AI assistants. Changes take effect after restarting the server."/>
 
     <dlg:text dlg:id="UrlText"
-              dlg:tab-index="8"
-              dlg:left="12" dlg:top="130"
+              dlg:tab-index="9"
+              dlg:left="12" dlg:top="144"
               dlg:width="240" dlg:height="10"
-              dlg:value="Health check: http://localhost:8765/health"/>
+              dlg:value="Health check: https://localhost:8765/health"/>
 
   </dlg:bulletinboard>
 </dlg:window>

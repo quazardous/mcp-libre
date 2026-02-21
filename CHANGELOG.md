@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.1] - 2026-02-21
+
+### Fixed
+- Auto-start not triggering after fresh install (`Jobs.xcu` missing from build manifest)
+- Module-level auto-start fallback for reliable server startup
+
+## [2.1.0] - 2026-02-21
+
+### Added
+- **HTTPS by default** - the MCP server now uses TLS with an auto-generated self-signed certificate (zero config needed)
+- `EnableSSL` toggle in LibreOffice Options (Tools > Options > MCP Server)
+
+### Changed
+- All URLs updated from `http://` to `https://`
+
 ## [2.0.1] - 2026-02-21
 
 ### Fixed

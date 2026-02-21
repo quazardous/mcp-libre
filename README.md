@@ -24,7 +24,7 @@ A LibreOffice extension runs an MCP server directly inside LibreOffice (port 876
   "mcpServers": {
     "libreoffice": {
       "type": "http",
-      "url": "http://localhost:8765/mcp"
+      "url": "https://localhost:8765/mcp"
     }
   }
 }
@@ -37,7 +37,7 @@ A LibreOffice extension runs an MCP server directly inside LibreOffice (port 876
   "mcpServers": {
     "libreoffice": {
       "type": "http",
-      "url": "http://localhost:8765/mcp"
+      "url": "https://localhost:8765/mcp"
     }
   }
 }

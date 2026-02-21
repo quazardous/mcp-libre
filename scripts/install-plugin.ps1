@@ -403,6 +403,7 @@ function Build-Oxt {
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="Addons.xcu"/>
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="ProtocolHandler.xcu"/>
     <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="OptionsDialog.xcu"/>
+    <manifest:file-entry manifest:media-type="application/vnd.sun.star.configuration-data" manifest:full-path="Jobs.xcu"/>
 </manifest:manifest>
 '@
     Write-Utf8NoBom (Join-Path $stageMeta "manifest.xml") $manifestXml
@@ -431,6 +432,7 @@ function Build-Oxt {
     Copy-Item (Join-Path $PluginDir "MCPServerConfig.xcs") $StagingDir
     Copy-Item (Join-Path $PluginDir "MCPServerConfig.xcu") $StagingDir
     Copy-Item (Join-Path $PluginDir "OptionsDialog.xcu") $StagingDir
+    Copy-Item (Join-Path $PluginDir "Jobs.xcu") $StagingDir
 
     # Dialogs (options page layout)
     $stageDialogs = Join-Path $StagingDir "dialogs"
@@ -605,7 +607,7 @@ function Start-LibreOfficeApp {
     Write-OK "LibreOffice started"
     Write-Info "Check menu bar for 'MCP Server' entry"
     Write-Info "Click 'Start MCP Server', then test with:"
-    Write-Info "  curl http://localhost:8765/health"
+    Write-Info "  curl -k https://localhost:8765/health"
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -670,7 +672,7 @@ function Main {
     Write-Host "  Next steps:" -ForegroundColor White
     Write-Host "  1. Open a document in LibreOffice" -ForegroundColor Gray
     Write-Host "  2. MCP Server > Start MCP Server  (in the menu bar)" -ForegroundColor Gray
-    Write-Host "  3. Test: curl http://localhost:8765/health" -ForegroundColor Gray
+    Write-Host "  3. Test: curl -k https://localhost:8765/health" -ForegroundColor Gray
     Write-Host ""
 }
 

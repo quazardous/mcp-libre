@@ -5,7 +5,7 @@ LibreOffice, enabling AI assistants (Claude Desktop, Claude Code, etc.)
 to manipulate documents in real-time through the UNO API.
 
 Key Features:
-- MCP Streamable HTTP on localhost:8765/mcp (JSON-RPC 2.0)
+- MCP Streamable HTTPS on localhost:8765/mcp (JSON-RPC 2.0, TLS with auto-generated certificate)
 - 67+ tools for Writer, Calc, and Impress documents
 - Tree-based heading navigation for large documents
 - AI annotations for persistent summaries across sessions
@@ -17,7 +17,7 @@ Installation:
 2. Double-click the .oxt file (or drag into LibreOffice)
 3. Restart LibreOffice
 
-The MCP server starts automatically on http://localhost:8765/mcp.
+The MCP server starts automatically on https://localhost:8765/mcp.
 Configure your AI client to connect to this URL.
 
 For documentation, visit:

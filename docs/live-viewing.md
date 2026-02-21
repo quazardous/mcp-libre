@@ -186,7 +186,7 @@ Monitors a document for changes and reports them.
 
 ### Quick health check
 ```bash
-curl http://localhost:8765/health
+curl -k https://localhost:8765/health
 ```
 
 ### Test via MCP tools
