@@ -16,14 +16,25 @@
     <prop oor:name="EnableSSL" oor:type="xs:boolean">
       <value>true</value>
     </prop>
-    <prop oor:name="EnableTunnel" oor:type="xs:boolean">
-      <value>false</value>
-    </prop>
-    <prop oor:name="TunnelProvider" oor:type="xs:string">
-      <value>cloudflared</value>
-    </prop>
-    <prop oor:name="TunnelServer" oor:type="xs:string">
-      <value>bore.pub</value>
-    </prop>
+    <node oor:name="Tunnel">
+      <prop oor:name="Enabled" oor:type="xs:boolean">
+        <value>false</value>
+      </prop>
+      <prop oor:name="Provider" oor:type="xs:string">
+        <value>cloudflared</value>
+      </prop>
+      <node oor:name="Bore">
+        <prop oor:name="Server" oor:type="xs:string">
+          <value>bore.pub</value>
+        </prop>
+      </node>
+      <node oor:name="Cloudflared">
+      </node>
+      <node oor:name="Ngrok">
+        <prop oor:name="Authtoken" oor:type="xs:string">
+          <value></value>
+        </prop>
+      </node>
+    </node>
   </node>
 </oor:component-data>

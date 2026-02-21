@@ -49,24 +49,72 @@
         </info>
         <value>true</value>
       </prop>
-      <prop oor:name="EnableTunnel" oor:type="xs:boolean" oor:nillable="false">
+
+      <!-- Tunnel configuration -->
+      <group oor:name="Tunnel">
         <info>
-          <desc>Enable tunnel to expose the server publicly.</desc>
+          <desc>Expose the MCP server publicly via a TCP/HTTP tunnel.
+Supported providers: cloudflared, bore, ngrok.</desc>
         </info>
-        <value>false</value>
-      </prop>
-      <prop oor:name="TunnelProvider" oor:type="xs:string" oor:nillable="false">
-        <info>
-          <desc>Tunnel provider: bore, cloudflared, or ngrok.</desc>
-        </info>
-        <value>cloudflared</value>
-      </prop>
-      <prop oor:name="TunnelServer" oor:type="xs:string" oor:nillable="false">
-        <info>
-          <desc>bore relay server address (only used by bore provider).</desc>
-        </info>
-        <value>bore.pub</value>
-      </prop>
+        <prop oor:name="Enabled" oor:type="xs:boolean" oor:nillable="false">
+          <info>
+            <desc>Auto-start tunnel when MCP server starts.</desc>
+          </info>
+          <value>false</value>
+        </prop>
+        <prop oor:name="Provider" oor:type="xs:string" oor:nillable="false">
+          <info>
+            <desc>Active tunnel provider: cloudflared, bore, or ngrok.</desc>
+          </info>
+          <value>cloudflared</value>
+        </prop>
+
+        <!-- bore — lightweight TCP tunnel, no account needed.
+             Install: https://github.com/ekzhang/bore/releases
+             Forwards raw TCP so the client sees the self-signed cert directly. -->
+        <group oor:name="Bore">
+          <info>
+            <desc>bore tunnel settings. bore forwards raw TCP — no account required.
+Install from https://github.com/ekzhang/bore/releases</desc>
+          </info>
+          <prop oor:name="Server" oor:type="xs:string" oor:nillable="false">
+            <info>
+              <desc>bore relay server address (default: bore.pub).</desc>
+            </info>
+            <value>bore.pub</value>
+          </prop>
+        </group>
+
+        <!-- cloudflared — Cloudflare quick tunnel, no account needed.
+             Install: winget install Cloudflare.cloudflared (or brew install cloudflared)
+             Gives a trusted HTTPS URL (*.trycloudflare.com). -->
+        <group oor:name="Cloudflared">
+          <info>
+            <desc>cloudflared (Cloudflare Tunnel) settings. No account needed for quick tunnels.
+Install: winget install Cloudflare.cloudflared
+Gives a public HTTPS URL like https://xxx.trycloudflare.com</desc>
+          </info>
+        </group>
+
+        <!-- ngrok — requires a free account + authtoken.
+             Install: https://ngrok.com/download
+             Run once: ngrok config add-authtoken YOUR_TOKEN
+             Free tier: 20k req/month, 1 GB bandwidth. -->
+        <group oor:name="Ngrok">
+          <info>
+            <desc>ngrok tunnel settings. Requires a free account + authtoken.
+Install: https://ngrok.com/download
+Setup: ngrok config add-authtoken YOUR_TOKEN
+Free tier limits: 20k requests/month, 1 GB bandwidth.</desc>
+          </info>
+          <prop oor:name="Authtoken" oor:type="xs:string" oor:nillable="false">
+            <info>
+              <desc>ngrok authtoken (leave empty to use the one from ngrok config file).</desc>
+            </info>
+            <value></value>
+          </prop>
+        </group>
+      </group>
     </group>
   </component>
 </oor:component-schema>

@@ -4,7 +4,7 @@
             xmlns:script="http://openoffice.org/2000/script"
             dlg:id="MCPSettings"
             dlg:left="0" dlg:top="0"
-            dlg:width="260" dlg:height="235"
+            dlg:width="260" dlg:height="250"
             dlg:closeable="true"
             dlg:withtitlebar="false">
   <dlg:bulletinboard>
@@ -89,7 +89,7 @@
                   dlg:width="100" dlg:height="12"
                   dlg:spin="true"/>
 
-    <!-- Tunnel server label + field (bore only) -->
+    <!-- bore: relay server -->
     <dlg:text dlg:id="TunnelServerLabel"
               dlg:tab-index="11"
               dlg:left="12" dlg:top="146"
@@ -102,23 +102,36 @@
                    dlg:width="120" dlg:height="12"
                    dlg:value="bore.pub"/>
 
+    <!-- ngrok: authtoken -->
+    <dlg:text dlg:id="NgrokTokenLabel"
+              dlg:tab-index="13"
+              dlg:left="12" dlg:top="162"
+              dlg:width="45" dlg:height="10"
+              dlg:value="Token:"/>
+
+    <dlg:textfield dlg:id="NgrokTokenField"
+                   dlg:tab-index="14"
+                   dlg:left="60" dlg:top="160"
+                   dlg:width="180" dlg:height="12"
+                   dlg:value=""/>
+
     <!-- Info section -->
     <dlg:fixedline dlg:id="InfoLine"
-                   dlg:tab-index="13"
-                   dlg:left="6" dlg:top="162"
+                   dlg:tab-index="15"
+                   dlg:left="6" dlg:top="178"
                    dlg:width="248" dlg:height="8"
                    dlg:value="Information"/>
 
     <dlg:text dlg:id="InfoText"
-              dlg:tab-index="14"
-              dlg:left="12" dlg:top="176"
+              dlg:tab-index="16"
+              dlg:left="12" dlg:top="190"
               dlg:width="240" dlg:height="24"
               dlg:multiline="true"
               dlg:value="The MCP server exposes LibreOffice document tools for AI assistants. Changes take effect after restarting the server."/>
 
     <dlg:text dlg:id="UrlText"
-              dlg:tab-index="15"
-              dlg:left="12" dlg:top="204"
+              dlg:tab-index="17"
+              dlg:left="12" dlg:top="220"
               dlg:width="240" dlg:height="10"
               dlg:value="Health check: https://localhost:8765/health"/>
 

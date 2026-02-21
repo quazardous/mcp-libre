@@ -66,7 +66,7 @@
                         </prop>
                     </node>
 
-                    <!-- Tunnel (bore) -->
+                    <!-- Tunnel -->
                     <node oor:name="m6" oor:op="replace">
                         <prop oor:name="Title" oor:type="xs:string">
                             <value xml:lang="en-US">Start Tunnel</value>

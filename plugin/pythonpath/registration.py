@@ -61,7 +61,10 @@ _DEFAULT_CONFIG = {
     "enable_tunnel": False,
     "tunnel_provider": "cloudflared",
     "tunnel_server": "bore.pub",
+    "ngrok_authtoken": "",
 }
+
+_TUNNEL_NODE_PATH = _CONFIG_NODE_PATH + "/Tunnel"
 
 
 def _read_lo_config():
@@ -84,19 +87,30 @@ def _read_lo_config():
         try:
             cfg["enable_ssl"] = bool(access.getPropertyValue("EnableSSL"))
         except Exception:
-            cfg["enable_ssl"] = True  # default when schema not yet updated
+            cfg["enable_ssl"] = True
+
+        # Read nested Tunnel config
         try:
-            cfg["enable_tunnel"] = bool(access.getPropertyValue("EnableTunnel"))
+            tunnel = access.getByName("Tunnel")
+            cfg["enable_tunnel"] = bool(tunnel.getPropertyValue("Enabled"))
+            cfg["tunnel_provider"] = str(tunnel.getPropertyValue("Provider"))
+            try:
+                bore = tunnel.getByName("Bore")
+                cfg["tunnel_server"] = str(bore.getPropertyValue("Server"))
+            except Exception:
+                cfg["tunnel_server"] = "bore.pub"
+            try:
+                ngrok = tunnel.getByName("Ngrok")
+                cfg["ngrok_authtoken"] = str(ngrok.getPropertyValue("Authtoken"))
+            except Exception:
+                cfg["ngrok_authtoken"] = ""
         except Exception:
+            # Fallback for old flat schema
             cfg["enable_tunnel"] = False
-        try:
-            cfg["tunnel_provider"] = str(access.getPropertyValue("TunnelProvider"))
-        except Exception:
             cfg["tunnel_provider"] = "cloudflared"
-        try:
-            cfg["tunnel_server"] = str(access.getPropertyValue("TunnelServer"))
-        except Exception:
             cfg["tunnel_server"] = "bore.pub"
+            cfg["ngrok_authtoken"] = ""
+
         access.dispose()
         logger.info(f"Config loaded from LO registry: {cfg}")
         return cfg
@@ -109,7 +123,9 @@ def _write_lo_config(values):
     """Write config values to LibreOffice native configuration registry.
 
     Args:
-        values: dict with keys like "autostart", "port", "host".
+        values: dict with keys like "autostart", "port", "host",
+                "enable_tunnel", "tunnel_provider", "tunnel_server",
+                "ngrok_authtoken".
     """
     try:
         ctx = uno.getComponentContext()
@@ -121,14 +137,31 @@ def _write_lo_config(values):
         node_arg.Value = _CONFIG_NODE_PATH
         update = provider.createInstanceWithArguments(
             "com.sun.star.configuration.ConfigurationUpdateAccess", (node_arg,))
-        # Map our keys to LO property names
-        key_map = {"autostart": "AutoStart", "port": "Port", "host": "Host",
-                   "enable_ssl": "EnableSSL", "enable_tunnel": "EnableTunnel",
-                   "tunnel_provider": "TunnelProvider", "tunnel_server": "TunnelServer"}
+
+        # Server-level properties
+        server_map = {"autostart": "AutoStart", "port": "Port", "host": "Host",
+                      "enable_ssl": "EnableSSL"}
         for key, value in values.items():
-            lo_key = key_map.get(key)
+            lo_key = server_map.get(key)
             if lo_key:
                 update.setPropertyValue(lo_key, value)
+
+        # Tunnel sub-group
+        tunnel_keys = {"enable_tunnel", "tunnel_provider", "tunnel_server",
+                       "ngrok_authtoken"}
+        if tunnel_keys & values.keys():
+            tunnel = update.getByName("Tunnel")
+            if "enable_tunnel" in values:
+                tunnel.setPropertyValue("Enabled", values["enable_tunnel"])
+            if "tunnel_provider" in values:
+                tunnel.setPropertyValue("Provider", values["tunnel_provider"])
+            if "tunnel_server" in values:
+                bore = tunnel.getByName("Bore")
+                bore.setPropertyValue("Server", values["tunnel_server"])
+            if "ngrok_authtoken" in values:
+                ngrok = tunnel.getByName("Ngrok")
+                ngrok.setPropertyValue("Authtoken", values["ngrok_authtoken"])
+
         update.commitChanges()
         update.dispose()
         logger.info(f"Config written to LO registry: {values}")
@@ -830,10 +863,16 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
         port, scheme = self._tunnel_ensure_server()
         logger.info(f"Starting ngrok tunnel: {scheme}://localhost:{port}")
 
+        cmd = ["ngrok", "http", f"{scheme}://localhost:{port}",
+               "--log", "stdout", "--log-format", "json"]
+        # Use authtoken from settings if provided
+        authtoken = _config.get("ngrok_authtoken", "").strip()
+        if authtoken:
+            cmd.extend(["--authtoken", authtoken])
+
         try:
             proc = _subprocess.Popen(
-                ["ngrok", "http", f"{scheme}://localhost:{port}",
-                 "--log", "stdout", "--log-format", "json"],
+                cmd,
                 stdout=_subprocess.PIPE,
                 stderr=_subprocess.STDOUT,
                 text=True,
@@ -1107,6 +1146,8 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
                 provider_list.selectItemPos(0, True)
             xWindow.getControl("TunnelServerField").setText(
                 cfg.get("tunnel_server", "bore.pub"))
+            xWindow.getControl("NgrokTokenField").setText(
+                cfg.get("ngrok_authtoken", ""))
             scheme = "https" if cfg.get("enable_ssl", True) else "http"
             xWindow.getControl("UrlText").setText(
                 f"Health check: {scheme}://{cfg['host']}:{cfg['port']}/health")
@@ -1128,6 +1169,7 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
                     else "cloudflared"
                 ))(xWindow.getControl("TunnelProviderList")),
                 "tunnel_server": xWindow.getControl("TunnelServerField").getText(),
+                "ngrok_authtoken": xWindow.getControl("NgrokTokenField").getText(),
             }
             logger.info(f"Options: saving {new_values}")
 
