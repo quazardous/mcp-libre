@@ -82,8 +82,10 @@ Get-ChildItem $devPy -Recurse -Directory -Filter "__pycache__" -ErrorAction Sile
 $devReg = Join-Path $devPy "registration.py"
 if (Test-Path $devReg) { Remove-Item $devReg -Force }
 
-# Fix relative imports in all .py files (recursive)
-Get-ChildItem $DevDir -Filter "*.py" -Recurse | ForEach-Object {
+# Fix relative imports ONLY at pythonpath/ root (not sub-packages).
+# Sub-packages (services/, tools/) keep relative imports.
+$devPyResolved = (Resolve-Path $devPy).Path
+Get-ChildItem $devPy -Filter "*.py" -File | ForEach-Object {
     $content = Get-Content $_.FullName -Raw -Encoding UTF8
     if (-not $content) { return }
     $content = $content -replace '^\xEF\xBB\xBF', ''
@@ -96,6 +98,31 @@ Get-ChildItem $DevDir -Filter "*.py" -Recurse | ForEach-Object {
         Write-Host "    Fixed imports: $($_.Name)" -ForegroundColor Gray
     }
 }
+# Root registration.py also needs fixing
+$rootReg = Join-Path $DevDir "registration.py"
+if (Test-Path $rootReg) {
+    $content = Get-Content $rootReg -Raw -Encoding UTF8
+    if ($content) {
+        $content = $content -replace '^\xEF\xBB\xBF', ''
+        $content = $content.TrimStart([char]0xFEFF)
+        $original = $content
+        $content = $content -replace 'from \.([\w]+) import', 'from $1 import'
+        Write-Utf8NoBom $rootReg $content
+        if ($content -ne $original) {
+            Write-Host "    Fixed imports: registration.py" -ForegroundColor Gray
+        }
+    }
+}
+# Sub-packages: strip BOM only
+Get-ChildItem $devPy -Filter "*.py" -Recurse -File |
+    Where-Object { $_.DirectoryName -ne $devPyResolved } |
+    ForEach-Object {
+        $content = Get-Content $_.FullName -Raw -Encoding UTF8
+        if (-not $content) { return }
+        $content = $content -replace '^\xEF\xBB\xBF', ''
+        $content = $content.TrimStart([char]0xFEFF)
+        Write-Utf8NoBom $_.FullName $content
+    }
 
 # AGENT.md (served by HTTP endpoint)
 Copy-Item (Join-Path $ProjectRoot "AGENT.md") $DevDir

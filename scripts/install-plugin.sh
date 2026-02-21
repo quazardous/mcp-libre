@@ -99,22 +99,35 @@ ensure_lo_stopped() {
 # ── Fix Python imports ───────────────────────────────────────────────────────
 
 fix_python_imports() {
-    # Recursively fix relative imports in all .py files under $dir
+    # Fix relative imports ONLY for root-level .py files (not sub-packages).
+    # Sub-packages (services/, tools/) keep relative imports — Python resolves
+    # them normally. All files get BOM stripped.
     local dir="$1"
-    while IFS= read -r -d '' pyfile; do
-        local original
+
+    # Root-level: fix relative imports + strip BOM
+    for pyfile in "$dir"/*.py; do
+        [ -f "$pyfile" ] || continue
+        local original content
         original=$(cat "$pyfile")
-        local content
-        # Fix relative imports
         content=$(echo "$original" | sed 's/from \.\([a-zA-Z_][a-zA-Z0-9_]*\) import/from \1 import/g')
         content=$(echo "$content" | sed 's/import \.\([a-zA-Z_][a-zA-Z0-9_]*\)/import \1/g')
-        # Remove BOM
         content=$(echo "$content" | sed '1s/^\xEF\xBB\xBF//')
         printf '%s\n' "$content" > "$pyfile"
         if [ "$content" != "$original" ]; then
             echo "    Fixed imports in $(basename "$pyfile")"
         fi
-    done < <(find "$dir" -name "*.py" -print0)
+    done
+
+    # Sub-packages: strip BOM only (keep relative imports)
+    while IFS= read -r -d '' pyfile; do
+        local original content
+        original=$(cat "$pyfile")
+        content=$(echo "$original" | sed '1s/^\xEF\xBB\xBF//')
+        if [ "$content" != "$original" ]; then
+            printf '%s\n' "$content" > "$pyfile"
+            echo "    Fixed BOM in $(basename "$pyfile")"
+        fi
+    done < <(find "$dir" -mindepth 2 -name "*.py" -print0)
 }
 
 # ── Build .oxt ───────────────────────────────────────────────────────────────

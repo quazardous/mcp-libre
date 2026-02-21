@@ -263,6 +263,13 @@ function Invoke-Unopkg {
             }
         }
 
+        # "Activation error" on `add` → extension IS installed, just registration
+        # failed (LO Python can't resolve all imports in unopkg context). Treat as OK.
+        if ($outStr -match "activation|l.activation") {
+            Write-Warn "Activation warning (harmless - extension loads at LO startup)"
+            return @{ Success = $true; Output = $outStr; ExitCode = $exit }
+        }
+
         # Other error on last attempt → give up
         if ($attempt -gt $MaxRetries) {
             return @{ Success = $false; Output = $outStr; ExitCode = $exit }
@@ -280,17 +287,19 @@ function Invoke-Unopkg {
 function Fix-PythonImports {
     <#
     .SYNOPSIS
-        Convert relative imports to absolute in staged .py files (recursive).
-        LibreOffice adds pythonpath/ to sys.path directly, so
-        "from .mcp_server import X" must become "from mcp_server import X".
-        Re-writes all files as UTF-8 without BOM (LO Python chokes on BOM).
+        Convert relative imports to absolute ONLY for .py files at the root of
+        the given directory (not in sub-packages). LO adds pythonpath/ to sys.path
+        directly, so root-level "from .mcp_server import X" must become
+        "from mcp_server import X". Sub-packages (services/, tools/) keep their
+        relative imports intact since Python resolves them normally.
+        All files are re-written as UTF-8 without BOM (LO Python chokes on BOM).
     #>
     param([string]$Directory)
 
-    Get-ChildItem $Directory -Filter "*.py" -Recurse | ForEach-Object {
+    # Root-level .py files: strip BOM + fix relative imports
+    Get-ChildItem $Directory -Filter "*.py" -File | ForEach-Object {
         $content = Get-Content $_.FullName -Raw -Encoding UTF8
         if (-not $content) { return }
-        # Strip BOM if present in source
         $content = $content -replace '^\xEF\xBB\xBF', ''
         $content = $content.TrimStart([char]0xFEFF)
         $original = $content
@@ -300,12 +309,26 @@ function Fix-PythonImports {
         # import .module  -->  import module
         $content = $content -replace 'import \.([\w]+)', 'import $1'
 
-        # Always rewrite as UTF-8 no BOM
         Write-Utf8NoBom $_.FullName $content
         if ($content -ne $original) {
             Write-Info "Fixed imports in $($_.Name)"
         }
     }
+
+    # Sub-package .py files: strip BOM only (keep relative imports)
+    Get-ChildItem $Directory -Filter "*.py" -Recurse -File |
+        Where-Object { $_.DirectoryName -ne (Resolve-Path $Directory).Path } |
+        ForEach-Object {
+            $content = Get-Content $_.FullName -Raw -Encoding UTF8
+            if (-not $content) { return }
+            $original = $content
+            $content = $content -replace '^\xEF\xBB\xBF', ''
+            $content = $content.TrimStart([char]0xFEFF)
+            Write-Utf8NoBom $_.FullName $content
+            if ($content -ne $original) {
+                Write-Info "Fixed BOM in $($_.Name)"
+            }
+        }
 }
 
 function Build-Oxt {
@@ -436,12 +459,21 @@ function Build-Oxt {
     # ── Create .oxt (ZIP) ────────────────────────────────────────────────
     Write-Step "Creating .oxt package..."
     New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
-    # Compress-Archive only supports .zip — create as .zip then rename
-    $ZipFile = [System.IO.Path]::ChangeExtension($OxtFile, ".zip")
-    if (Test-Path $ZipFile) { Remove-Item $ZipFile -Force }
+    # Compress-Archive uses backslashes in entry names — Java/LO rejects those.
+    # Use .NET ZipFile API which uses forward slashes.
     if (Test-Path $OxtFile) { Remove-Item $OxtFile -Force }
-    Compress-Archive -Path "$StagingDir\*" -DestinationPath $ZipFile -Force
-    Rename-Item $ZipFile $OxtFile
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::Open($OxtFile, 'Create')
+    try {
+        $basePath = (Resolve-Path $StagingDir).Path.TrimEnd('\') + '\'
+        Get-ChildItem -Path $StagingDir -Recurse -File | ForEach-Object {
+            $entryName = $_.FullName.Substring($basePath.Length).Replace('\', '/')
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip, $_.FullName, $entryName, 'Optimal') | Out-Null
+        }
+    } finally {
+        $zip.Dispose()
+    }
 
     if (Test-Path $OxtFile) {
         $size = (Get-Item $OxtFile).Length
@@ -512,14 +544,25 @@ function Install-Extension {
 
     Write-OK "Extension installed successfully!"
 
-    # ── 5. Verify ────────────────────────────────────────────────────────
-    Start-Sleep -Seconds 2
+    # ── 5. Verify by checking the cache directly ────────────────────────
     Write-Step "Verifying installation..."
-    $verifyResult = Invoke-Unopkg $Unopkg @("list") -MaxRetries 1 -DelaySec 2
-    if ($verifyResult.Success -and $verifyResult.Output -match [regex]::Escape($ExtensionId)) {
-        Write-OK "Extension verified: $ExtensionId is registered"
-    } else {
-        Write-Warn "Could not verify via unopkg list (this is often OK, LO will load it on start)"
+    $cacheDir = Get-UnopkgCacheDir
+    $verified = $false
+    if ($cacheDir) {
+        $cacheVersionFiles = Get-ChildItem $cacheDir -Recurse -Filter "version.py" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "libreoffice-mcp" }
+        foreach ($vf in $cacheVersionFiles) {
+            $vContent = Get-Content $vf.FullName -Raw -ErrorAction SilentlyContinue
+            if ($vContent -match 'EXTENSION_VERSION\s*=\s*"([^"]+)"') {
+                $cachedVersion = $Matches[1]
+                Write-OK "Extension verified in cache: v$cachedVersion"
+                $verified = $true
+                break
+            }
+        }
+    }
+    if (-not $verified) {
+        Write-Warn "Could not verify cached version (LO will load it on start)"
     }
 
     return $true

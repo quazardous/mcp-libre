@@ -81,22 +81,33 @@ cp -r "$PLUGIN_DIR/pythonpath" "$DEV_DIR/pythonpath"
 find "$DEV_DIR/pythonpath" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 rm -f "$DEV_DIR/pythonpath/registration.py"
 
-# Fix relative imports in all .py files (recursive)
+# Fix relative imports ONLY at pythonpath/ root + registration.py (not sub-packages).
+# Sub-packages (services/, tools/) keep relative imports.
 fix_imports() {
     local dir="$1"
-    while IFS= read -r -d '' pyfile; do
-        local original
+    # Root-level .py: fix relative imports + strip BOM
+    for pyfile in "$dir"/*.py "$dir"/pythonpath/*.py; do
+        [ -f "$pyfile" ] || continue
+        local original content
         original=$(cat "$pyfile")
-        local content
         content=$(echo "$original" | sed 's/from \.\([a-zA-Z_][a-zA-Z0-9_]*\) import/from \1 import/g')
         content=$(echo "$content" | sed 's/import \.\([a-zA-Z_][a-zA-Z0-9_]*\)/import \1/g')
-        # Remove BOM
         content=$(echo "$content" | sed '1s/^\xEF\xBB\xBF//')
         printf '%s\n' "$content" > "$pyfile"
         if [ "$content" != "$original" ]; then
             echo "    Fixed imports: $(basename "$pyfile")"
         fi
-    done < <(find "$dir" -name "*.py" -print0)
+    done
+    # Sub-packages: strip BOM only
+    while IFS= read -r -d '' pyfile; do
+        local original content
+        original=$(cat "$pyfile")
+        content=$(echo "$original" | sed '1s/^\xEF\xBB\xBF//')
+        if [ "$content" != "$original" ]; then
+            printf '%s\n' "$content" > "$pyfile"
+            echo "    Fixed BOM: $(basename "$pyfile")"
+        fi
+    done < <(find "$dir/pythonpath" -mindepth 2 -name "*.py" -print0 2>/dev/null)
 }
 fix_imports "$DEV_DIR"
 
