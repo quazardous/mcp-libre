@@ -49,6 +49,18 @@
         </info>
         <value>true</value>
       </prop>
+      <prop oor:name="EnableTunnel" oor:type="xs:boolean" oor:nillable="false">
+        <info>
+          <desc>Enable bore tunnel to expose the server publicly.</desc>
+        </info>
+        <value>false</value>
+      </prop>
+      <prop oor:name="TunnelServer" oor:type="xs:string" oor:nillable="false">
+        <info>
+          <desc>bore tunnel relay server address.</desc>
+        </info>
+        <value>bore.pub</value>
+      </prop>
     </group>
   </component>
 </oor:component-schema>

@@ -58,6 +58,8 @@ _DEFAULT_CONFIG = {
     "port": 8765,
     "host": "localhost",
     "enable_ssl": True,
+    "enable_tunnel": False,
+    "tunnel_server": "bore.pub",
 }
 
 
@@ -82,6 +84,14 @@ def _read_lo_config():
             cfg["enable_ssl"] = bool(access.getPropertyValue("EnableSSL"))
         except Exception:
             cfg["enable_ssl"] = True  # default when schema not yet updated
+        try:
+            cfg["enable_tunnel"] = bool(access.getPropertyValue("EnableTunnel"))
+        except Exception:
+            cfg["enable_tunnel"] = False
+        try:
+            cfg["tunnel_server"] = str(access.getPropertyValue("TunnelServer"))
+        except Exception:
+            cfg["tunnel_server"] = "bore.pub"
         access.dispose()
         logger.info(f"Config loaded from LO registry: {cfg}")
         return cfg
@@ -108,7 +118,8 @@ def _write_lo_config(values):
             "com.sun.star.configuration.ConfigurationUpdateAccess", (node_arg,))
         # Map our keys to LO property names
         key_map = {"autostart": "AutoStart", "port": "Port", "host": "Host",
-                   "enable_ssl": "EnableSSL"}
+                   "enable_ssl": "EnableSSL", "enable_tunnel": "EnableTunnel",
+                   "tunnel_server": "TunnelServer"}
         for key, value in values.items():
             lo_key = key_map.get(key)
             if lo_key:
@@ -130,6 +141,32 @@ def _load_config():
 
 _config = _load_config()
 logger.info(f"Config: autostart={_config['autostart']}, port={_config['port']}, ssl={_config.get('enable_ssl', True)}")
+
+# ── Tunnel state ──────────────────────────────────────────────────────────────
+
+_tunnel_state = {
+    "process": None,     # subprocess.Popen
+    "public_url": None,  # "bore.pub:43210"
+}
+
+
+def _stop_tunnel_process():
+    """Stop bore tunnel process if running (module-level helper)."""
+    proc = _tunnel_state["process"]
+    if proc is None:
+        return
+    try:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except _subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3)
+    except Exception as e:
+        logger.warning(f"Error stopping tunnel: {e}")
+    _tunnel_state["process"] = None
+    _tunnel_state["public_url"] = None
+
 
 # ── Port / zombie management ─────────────────────────────────────────────────
 
@@ -279,6 +316,11 @@ def _get_menu_text(url_path):
     if url_path == "toggle_ssl":
         ssl_on = _config.get("enable_ssl", True)
         return "HTTPS: On" if ssl_on else "HTTPS: Off"
+    if url_path == "toggle_tunnel":
+        if _tunnel_state["process"] is not None:
+            url = _tunnel_state["public_url"] or "..."
+            return f"Stop Tunnel ({url})"
+        return "Start Tunnel"
     return None
 
 
@@ -472,6 +514,8 @@ def _stop_mcp_server():
     _mcp_state["mcp_server"] = None
     _mcp_state["started"] = False
     _remove_pid_file()
+    # Auto-stop tunnel when server stops
+    _stop_tunnel_process()
     _set_server_state(_STATE_STOPPED)
     logger.info("MCP Extension stopped")
 
@@ -565,6 +609,8 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                     threading.Thread(target=self._do_start, daemon=True).start()
             elif cmd == "toggle_ssl":
                 self._do_toggle_ssl()
+            elif cmd == "toggle_tunnel":
+                self._do_toggle_tunnel()
             elif cmd == "get_status":
                 self._do_status()
             elif cmd == "about":
@@ -606,6 +652,9 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             scheme = "https" if _config.get("enable_ssl", True) else "http"
             _msgbox(self.ctx, "MCP Server",
                     f"MCP server started.\n{scheme}://{host}:{port}")
+            # Auto-start tunnel if enabled
+            if _config.get("enable_tunnel", False) and _tunnel_state["process"] is None:
+                self._do_start_tunnel()
         except Exception as e:
             _msgbox(self.ctx, "MCP Error", f"Failed to start:\n{e}")
 
@@ -634,6 +683,108 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             _msgbox(self.ctx, "MCP Server",
                     f"Switched to {scheme.upper()}.\n"
                     f"Will use {scheme}:// on next start.")
+
+    def _do_toggle_tunnel(self):
+        """Toggle bore tunnel on/off."""
+        if _tunnel_state["process"] is not None:
+            self._do_stop_tunnel()
+        else:
+            threading.Thread(target=self._do_start_tunnel, daemon=True).start()
+
+    def _do_start_tunnel(self):
+        """Start bore tunnel (runs in background thread)."""
+        import re
+        # Check bore is installed
+        try:
+            _subprocess.run(
+                ["bore", "--version"],
+                capture_output=True, timeout=5,
+                creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except FileNotFoundError:
+            _msgbox(self.ctx, "MCP Server",
+                    "bore not found.\n\n"
+                    "Install from:\n"
+                    "https://github.com/ekzhang/bore/releases")
+            return
+        except Exception as e:
+            _msgbox(self.ctx, "MCP Server", f"bore check failed: {e}")
+            return
+
+        # Auto-start server if not running
+        if not _mcp_state["started"]:
+            _set_server_state(_STATE_STARTING)
+            _start_mcp_server()
+
+        port = _config.get("port", 8765)
+        server = _config.get("tunnel_server", "bore.pub")
+        logger.info(f"Starting bore tunnel: localhost:{port} -> {server}")
+
+        try:
+            proc = _subprocess.Popen(
+                ["bore", "local", str(port), "--to", server],
+                stdout=_subprocess.PIPE,
+                stderr=_subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            _tunnel_state["process"] = proc
+            _notify_all_listeners()
+
+            # Read stdout to find public URL
+            url_found = False
+            for line in proc.stdout:
+                line = line.strip()
+                logger.info(f"bore: {line}")
+                m = re.search(r"listening at ([\w.\-]+:\d+)", line)
+                if m and not url_found:
+                    _tunnel_state["public_url"] = m.group(1)
+                    url_found = True
+                    _notify_all_listeners()
+                    scheme = "https" if _config.get("enable_ssl", True) else "http"
+                    _msgbox(self.ctx, "MCP Server",
+                            f"Tunnel active!\n\n"
+                            f"{scheme}://{m.group(1)}/mcp\n\n"
+                            f"Use this URL in ChatGPT Desktop.")
+
+            # If we get here, bore process has exited
+            rc = proc.wait()
+            if _tunnel_state["process"] is proc:
+                _tunnel_state["process"] = None
+                _tunnel_state["public_url"] = None
+                _notify_all_listeners()
+                if not url_found:
+                    _msgbox(self.ctx, "MCP Server",
+                            f"bore exited (code {rc}) without establishing tunnel.\n"
+                            f"Check that {server} is reachable.")
+                else:
+                    logger.info(f"bore tunnel closed (exit code {rc})")
+        except Exception as e:
+            logger.error(f"bore tunnel error: {e}")
+            _tunnel_state["process"] = None
+            _tunnel_state["public_url"] = None
+            _notify_all_listeners()
+            _msgbox(self.ctx, "MCP Server", f"Tunnel error:\n{e}")
+
+    def _do_stop_tunnel(self):
+        """Stop bore tunnel."""
+        proc = _tunnel_state["process"]
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except _subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3)
+        except Exception as e:
+            logger.warning(f"Error stopping tunnel: {e}")
+        _tunnel_state["process"] = None
+        _tunnel_state["public_url"] = None
+        _notify_all_listeners()
+        _msgbox(self.ctx, "MCP Server", "Tunnel stopped.")
 
     def _do_restart(self):
         """Stop, kill zombies, and restart."""
@@ -724,6 +875,8 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                     if mem_state and http_ok:
                         scheme = "https" if _config.get("enable_ssl", True) else "http"
                         lines.append(f"URL: {scheme}://{host}:{port}/health")
+                    if _tunnel_state["public_url"]:
+                        lines.append(f"Tunnel: {_tunnel_state['public_url']}")
                     try:
                         dlg_model.getByName("StatusText").Label = "\n".join(lines)
                     except Exception:
@@ -816,6 +969,10 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
             xWindow.getControl("PortField").setValue(float(cfg["port"]))
             xWindow.getControl("SSLCheck").setState(
                 1 if cfg.get("enable_ssl", True) else 0)
+            xWindow.getControl("TunnelCheck").setState(
+                1 if cfg.get("enable_tunnel", False) else 0)
+            xWindow.getControl("TunnelServerField").setText(
+                cfg.get("tunnel_server", "bore.pub"))
             scheme = "https" if cfg.get("enable_ssl", True) else "http"
             xWindow.getControl("UrlText").setText(
                 f"Health check: {scheme}://{cfg['host']}:{cfg['port']}/health")
@@ -830,6 +987,8 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
                 "port": int(xWindow.getControl("PortField").getValue()),
                 "host": xWindow.getControl("HostField").getText(),
                 "enable_ssl": xWindow.getControl("SSLCheck").getState() == 1,
+                "enable_tunnel": xWindow.getControl("TunnelCheck").getState() == 1,
+                "tunnel_server": xWindow.getControl("TunnelServerField").getText(),
             }
             logger.info(f"Options: saving {new_values}")
 

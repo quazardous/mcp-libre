@@ -66,6 +66,19 @@
                         </prop>
                     </node>
 
+                    <!-- Tunnel (bore) -->
+                    <node oor:name="m6" oor:op="replace">
+                        <prop oor:name="Title" oor:type="xs:string">
+                            <value xml:lang="en-US">Start Tunnel</value>
+                        </prop>
+                        <prop oor:name="URL" oor:type="xs:string">
+                            <value>org.mcp.libreoffice:toggle_tunnel</value>
+                        </prop>
+                        <prop oor:name="Target" oor:type="xs:string">
+                            <value>_self</value>
+                        </prop>
+                    </node>
+
                     <!-- Separator -->
                     <node oor:name="s1" oor:op="replace">
                         <prop oor:name="URL" oor:type="xs:string">

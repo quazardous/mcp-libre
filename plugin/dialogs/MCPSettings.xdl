@@ -4,7 +4,7 @@
             xmlns:script="http://openoffice.org/2000/script"
             dlg:id="MCPSettings"
             dlg:left="0" dlg:top="0"
-            dlg:width="260" dlg:height="185"
+            dlg:width="260" dlg:height="220"
             dlg:closeable="true"
             dlg:withtitlebar="false">
   <dlg:bulletinboard>
@@ -61,23 +61,51 @@
                   dlg:value="Enable HTTPS (TLS with auto-generated certificate)"
                   dlg:checked="true"/>
 
-    <!-- Info section -->
-    <dlg:fixedline dlg:id="InfoLine"
+    <!-- Tunnel section -->
+    <dlg:fixedline dlg:id="TunnelLine"
                    dlg:tab-index="7"
                    dlg:left="6" dlg:top="96"
+                   dlg:width="248" dlg:height="8"
+                   dlg:value="Tunnel (bore)"/>
+
+    <!-- Enable tunnel checkbox -->
+    <dlg:checkbox dlg:id="TunnelCheck"
+                  dlg:tab-index="8"
+                  dlg:left="12" dlg:top="112"
+                  dlg:width="200" dlg:height="12"
+                  dlg:value="Enable tunnel (expose server via bore relay)"
+                  dlg:checked="false"/>
+
+    <!-- Tunnel server label + field -->
+    <dlg:text dlg:id="TunnelServerLabel"
+              dlg:tab-index="9"
+              dlg:left="12" dlg:top="130"
+              dlg:width="45" dlg:height="10"
+              dlg:value="Server:"/>
+
+    <dlg:textfield dlg:id="TunnelServerField"
+                   dlg:tab-index="10"
+                   dlg:left="60" dlg:top="128"
+                   dlg:width="120" dlg:height="12"
+                   dlg:value="bore.pub"/>
+
+    <!-- Info section -->
+    <dlg:fixedline dlg:id="InfoLine"
+                   dlg:tab-index="11"
+                   dlg:left="6" dlg:top="148"
                    dlg:width="248" dlg:height="8"
                    dlg:value="Information"/>
 
     <dlg:text dlg:id="InfoText"
-              dlg:tab-index="8"
-              dlg:left="12" dlg:top="110"
-              dlg:width="240" dlg:height="30"
+              dlg:tab-index="12"
+              dlg:left="12" dlg:top="162"
+              dlg:width="240" dlg:height="24"
               dlg:multiline="true"
               dlg:value="The MCP server exposes LibreOffice document tools for AI assistants. Changes take effect after restarting the server."/>
 
     <dlg:text dlg:id="UrlText"
-              dlg:tab-index="9"
-              dlg:left="12" dlg:top="144"
+              dlg:tab-index="13"
+              dlg:left="12" dlg:top="190"
               dlg:width="240" dlg:height="10"
               dlg:value="Health check: https://localhost:8765/health"/>
 
