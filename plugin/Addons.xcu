@@ -53,6 +53,19 @@
                         </prop>
                     </node>
 
+                    <!-- Toggle HTTPS / HTTP -->
+                    <node oor:name="m5" oor:op="replace">
+                        <prop oor:name="Title" oor:type="xs:string">
+                            <value xml:lang="en-US">HTTPS: On</value>
+                        </prop>
+                        <prop oor:name="URL" oor:type="xs:string">
+                            <value>org.mcp.libreoffice:toggle_ssl</value>
+                        </prop>
+                        <prop oor:name="Target" oor:type="xs:string">
+                            <value>_self</value>
+                        </prop>
+                    </node>
+
                     <!-- Separator -->
                     <node oor:name="s1" oor:op="replace">
                         <prop oor:name="URL" oor:type="xs:string">

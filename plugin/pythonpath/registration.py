@@ -276,6 +276,9 @@ def _get_menu_text(url_path):
         if _server_state == _STATE_STARTING:
             return "Starting\u2026"
         return "Start Server"
+    if url_path == "toggle_ssl":
+        ssl_on = _config.get("enable_ssl", True)
+        return "HTTPS: On" if ssl_on else "HTTPS: Off"
     return None
 
 
@@ -560,6 +563,8 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                 else:
                     _set_server_state(_STATE_STARTING)
                     threading.Thread(target=self._do_start, daemon=True).start()
+            elif cmd == "toggle_ssl":
+                self._do_toggle_ssl()
             elif cmd == "get_status":
                 self._do_status()
             elif cmd == "about":
@@ -607,6 +612,28 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
     def _do_stop(self):
         _stop_mcp_server()
         _msgbox(self.ctx, "MCP Server", "MCP server stopped.")
+
+    def _do_toggle_ssl(self):
+        """Toggle HTTPS on/off, save config, restart server if running."""
+        old_ssl = _config.get("enable_ssl", True)
+        new_ssl = not old_ssl
+        _config["enable_ssl"] = new_ssl
+        _write_lo_config({"enable_ssl": new_ssl})
+        _notify_all_listeners()  # update menu text
+        scheme = "https" if new_ssl else "http"
+        if _mcp_state["started"]:
+            _stop_mcp_server()
+            host = _config.get("host", "localhost")
+            port = _config.get("port", 8765)
+            _kill_zombies_on_port(host, port)
+            _set_server_state(_STATE_STARTING)
+            threading.Thread(target=self._do_start, daemon=True).start()
+            _msgbox(self.ctx, "MCP Server",
+                    f"Switched to {scheme.upper()}.\nServer restarting...")
+        else:
+            _msgbox(self.ctx, "MCP Server",
+                    f"Switched to {scheme.upper()}.\n"
+                    f"Will use {scheme}:// on next start.")
 
     def _do_restart(self):
         """Stop, kill zombies, and restart."""

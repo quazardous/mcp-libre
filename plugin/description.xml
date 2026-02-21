@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<description xmlns="http://openoffice.org/extensions/description/2006" 
+<description xmlns="http://openoffice.org/extensions/description/2006"
+             xmlns:d="http://openoffice.org/extensions/description/2006"
+             xmlns:l="http://libreoffice.org/extensions/description/2011"
              xmlns:xlink="http://www.w3.org/1999/xlink">
     <identifier value="org.mcp.libreoffice.extension"/>
-    <version value="2.1.1"/>
+    <!-- Version is managed by version.py (single source of truth).
+         Build scripts patch this value automatically at build time. -->
+    <version value="2.1.2"/>
     <display-name>
         <name lang="en">LibreOffice MCP Extension</name>
     </display-name>
@@ -10,13 +14,13 @@
         <src lang="en" xlink:href="description-en.txt"/>
     </description>
     <publisher>
-        <name lang="en" xlink:href="https://github.com">MCP LibreOffice Team</name>
+        <name lang="en" xlink:href="https://github.com/quazardous/mcp-libre">MCP LibreOffice Team</name>
     </publisher>
     <release-notes>
         <src lang="en" xlink:href="release-notes-en.txt"/>
     </release-notes>
     <dependencies>
-        <OpenOffice.org-minimal-version value="7.0" dep:name="OpenOffice.org 7.0"/>
+        <l:LibreOffice-minimal-version value="7.0" d:name="LibreOffice 7.0"/>
     </dependencies>
     <registration>
         <simple-license accept-by="admin" default-license-id="this" suppress-on-update="true">

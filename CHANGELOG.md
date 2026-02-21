@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.2] - 2026-02-21
+
+### Added
+- HTTPS/HTTP toggle in the menu bar (MCP Server > HTTPS: On/Off)
+- Dynamic menu text updates to reflect current SSL state
+
+### Fixed
+- `tools/list` crash (`'McpTool' object has no attribute 'get'`) — used `getattr()` instead of `.get()` on tool objects
+- `description.xml` broken namespace (`dep:name` undeclared) — use proper `xmlns:l` / `xmlns:d` namespaces
+- Build scripts now copy real `description.xml` from `plugin/` instead of generating a hardcoded one
+- Build scripts patch version from `version.py` (single source of truth) into `description.xml` at build time
+- Linux build script: added `Jobs.xcu` to the XCU copy loop
+- Publisher URL in `description.xml` now points to the actual GitHub repo
+- Removed stale Python bridge config from `claude_desktop_config.json` (now uses HTTP direct like `.mcp.json`)
+
 ## [2.1.1] - 2026-02-21
 
 ### Fixed

@@ -210,25 +210,18 @@ build_oxt() {
 MANIFEST_EOF
     echo "    manifest.xml generated"
 
-    # description.xml
-    cat > "$STAGING_DIR/description.xml" << 'DESC_EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<description xmlns="http://openoffice.org/extensions/description/2006"
-             xmlns:xlink="http://www.w3.org/1999/xlink">
-    <identifier value="org.mcp.libreoffice.extension"/>
-    <version value="1.1.0"/>
-    <display-name>
-        <name lang="en">LibreOffice MCP Server Extension</name>
-    </display-name>
-    <publisher>
-        <name lang="en" xlink:href="https://github.com">MCP LibreOffice Team</name>
-    </publisher>
-</description>
-DESC_EOF
-    echo "    description.xml generated"
+    # description.xml — copy from plugin/, patch version from version.py (single source of truth)
+    cp "$PLUGIN_DIR/description.xml" "$STAGING_DIR/"
+    VERSION=$(grep -oP 'EXTENSION_VERSION\s*=\s*"\K[^"]+' "$PLUGIN_DIR/pythonpath/version.py")
+    if [ -n "$VERSION" ]; then
+        sed -i "s/<version value=\"[^\"]*\"/<version value=\"$VERSION\"/" "$STAGING_DIR/description.xml"
+        echo "    description.xml patched with version $VERSION"
+    else
+        echo "[!!] Could not read version from version.py"
+    fi
 
     # XCU/XCS config files
-    for f in Addons.xcu ProtocolHandler.xcu MCPServerConfig.xcs MCPServerConfig.xcu OptionsDialog.xcu; do
+    for f in Addons.xcu ProtocolHandler.xcu MCPServerConfig.xcs MCPServerConfig.xcu OptionsDialog.xcu Jobs.xcu; do
         cp "$PLUGIN_DIR/$f" "$STAGING_DIR/"
     done
 

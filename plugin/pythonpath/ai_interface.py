@@ -118,12 +118,12 @@ _EXECUTION_TIMEOUT = -32001
 def _build_mcp_tool_list(mcp_server) -> List[Dict[str, Any]]:
     """Convert our tool registry to MCP tools/list format."""
     tools = []
-    for name, tool_def in mcp_server.tools.items():
-        schema = dict(tool_def.get("parameters", {}))
+    for name, tool_obj in mcp_server.tools.items():
+        schema = dict(getattr(tool_obj, "parameters", {}))
         schema.setdefault("type", "object")
         tools.append({
             "name": name,
-            "description": tool_def.get("description", ""),
+            "description": getattr(tool_obj, "description", ""),
             "inputSchema": schema,
         })
     return tools

@@ -409,22 +409,19 @@ function Build-Oxt {
     Write-Utf8NoBom (Join-Path $stageMeta "manifest.xml") $manifestXml
     Write-Info "manifest.xml generated"
 
-    $descXml = @'
-<?xml version="1.0" encoding="UTF-8"?>
-<description xmlns="http://openoffice.org/extensions/description/2006"
-             xmlns:xlink="http://www.w3.org/1999/xlink">
-    <identifier value="org.mcp.libreoffice.extension"/>
-    <version value="1.1.0"/>
-    <display-name>
-        <name lang="en">LibreOffice MCP Server Extension</name>
-    </display-name>
-    <publisher>
-        <name lang="en" xlink:href="https://github.com">MCP LibreOffice Team</name>
-    </publisher>
-</description>
-'@
-    Write-Utf8NoBom (Join-Path $StagingDir "description.xml") $descXml
-    Write-Info "description.xml generated"
+    # description.xml — copy from plugin/, patch version from version.py (single source of truth)
+    Copy-Item (Join-Path $PluginDir "description.xml") $StagingDir
+    $versionPy = Get-Content (Join-Path $PluginDir "pythonpath\version.py") -Raw
+    if ($versionPy -match 'EXTENSION_VERSION\s*=\s*"([^"]+)"') {
+        $version = $Matches[1]
+        $descPath = Join-Path $StagingDir "description.xml"
+        $descContent = Get-Content $descPath -Raw -Encoding UTF8
+        $descContent = $descContent -replace '<version value="[^"]*"/>', "<version value=`"$version`"/>"
+        Write-Utf8NoBom $descPath $descContent
+        Write-Info "description.xml patched with version $version"
+    } else {
+        Write-Warn "Could not read version from version.py"
+    }
 
     # XCU/XCS config files
     Copy-Item (Join-Path $PluginDir "Addons.xcu") $StagingDir
