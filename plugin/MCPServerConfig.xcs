@@ -51,13 +51,19 @@
       </prop>
       <prop oor:name="EnableTunnel" oor:type="xs:boolean" oor:nillable="false">
         <info>
-          <desc>Enable bore tunnel to expose the server publicly.</desc>
+          <desc>Enable tunnel to expose the server publicly.</desc>
         </info>
         <value>false</value>
       </prop>
+      <prop oor:name="TunnelProvider" oor:type="xs:string" oor:nillable="false">
+        <info>
+          <desc>Tunnel provider: bore, cloudflared, or ngrok.</desc>
+        </info>
+        <value>cloudflared</value>
+      </prop>
       <prop oor:name="TunnelServer" oor:type="xs:string" oor:nillable="false">
         <info>
-          <desc>bore tunnel relay server address.</desc>
+          <desc>bore relay server address (only used by bore provider).</desc>
         </info>
         <value>bore.pub</value>
       </prop>

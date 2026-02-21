@@ -19,6 +19,9 @@
     <prop oor:name="EnableTunnel" oor:type="xs:boolean">
       <value>false</value>
     </prop>
+    <prop oor:name="TunnelProvider" oor:type="xs:string">
+      <value>cloudflared</value>
+    </prop>
     <prop oor:name="TunnelServer" oor:type="xs:string">
       <value>bore.pub</value>
     </prop>
