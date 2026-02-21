@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.1] - 2026-02-21
+
+### Fixed
+- About dialog and extension metadata updated (name, version, description)
+- Build script: `.oxt` packaging on Windows (Compress-Archive .zip rename)
+
 ## [2.0.0] - 2026-02-21
 
 ### Changed

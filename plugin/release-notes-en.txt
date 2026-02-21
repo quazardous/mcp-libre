@@ -1,15 +1,13 @@
-Version 1.4.0
+Version 2.0.0
 
+- Full architecture rewrite: cleaner codebase, easier to extend
+- Backpressure: concurrent tool calls queue instead of freezing the UI
+- 67+ document manipulation tools (Writer, Calc, Impress)
 - MCP Streamable HTTP protocol (POST /mcp, JSON-RPC 2.0)
-- Compatible with Claude Desktop, ChatGPT Desktop, and any MCP client
-- 100+ document manipulation tools (Writer, Calc, Impress)
+- Compatible with Claude Desktop, Claude Code, and any MCP client
 - Tree-based document navigation with heading hierarchy
-- AI annotations (MCP-AI authored comments) for persistent summaries
-- Bookmark-based stable heading identifiers
-- Full search/replace with paragraph context
+- AI annotations for persistent summaries
 - Track changes, comments, styles, tables, images, frames
-- GUI yield during long operations to prevent freezing
-- Main-thread execution via AsyncCallback for thread safety
 
 For support and documentation, visit:
 https://github.com/quazardous/mcp-libre

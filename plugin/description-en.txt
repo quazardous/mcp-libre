@@ -1,23 +1,21 @@
-LibreOffice MCP Server Extension
+LibreOffice MCP Extension
 
 This extension embeds a Model Context Protocol (MCP) server directly inside
-LibreOffice, enabling AI assistants (Claude Desktop, ChatGPT Desktop, etc.)
+LibreOffice, enabling AI assistants (Claude Desktop, Claude Code, etc.)
 to manipulate documents in real-time through the UNO API.
 
 Key Features:
 - MCP Streamable HTTP on localhost:8765/mcp (JSON-RPC 2.0)
-- 100+ tools for Writer, Calc, and Impress documents
+- 67+ tools for Writer, Calc, and Impress documents
 - Tree-based heading navigation for large documents
 - AI annotations for persistent summaries across sessions
 - Search, replace, track changes, comments, styles, tables, images
-- Thread-safe main-thread execution via AsyncCallback
+- Backpressure: queues concurrent requests instead of freezing the UI
 
 Installation:
 1. Download the extension (.oxt file)
-2. Open LibreOffice
-3. Go to Tools > Extension Manager
-4. Click "Add" and select the .oxt file
-5. Restart LibreOffice
+2. Double-click the .oxt file (or drag into LibreOffice)
+3. Restart LibreOffice
 
 The MCP server starts automatically on http://localhost:8765/mcp.
 Configure your AI client to connect to this URL.

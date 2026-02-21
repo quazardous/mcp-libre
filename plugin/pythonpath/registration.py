@@ -36,7 +36,7 @@ SERVICE_NAMES = ("com.sun.star.frame.ProtocolHandler",)
 
 from .version import EXTENSION_VERSION
 
-EXTENSION_NAME = "LibreOffice MCP Server"
+EXTENSION_NAME = "LibreOffice MCP"
 EXTENSION_URL = "https://github.com/quazardous/mcp-libre"
 
 logger.info("=== registration.py loaded — %s v%s ===", EXTENSION_NAME, EXTENSION_VERSION)
