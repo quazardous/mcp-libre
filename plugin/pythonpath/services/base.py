@@ -197,7 +197,8 @@ class BaseService:
             return {"slide_index": int(loc_value)}
 
         # -- Writer-specific locators (delegate) --
-        if loc_type in ("bookmark", "page", "section", "heading"):
+        if loc_type in ("bookmark", "page", "section", "heading",
+                        "heading_text"):
             return self._registry.writer.resolve_writer_locator(
                 doc, loc_type, loc_value)
 
@@ -513,3 +514,108 @@ class BaseService:
                     "count": len(docs)}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    # ------------------------------------------------------------------
+    # Tracked changes — author switching & redline comments
+    # ------------------------------------------------------------------
+
+    def _user_profile_access(self, writable=False):
+        """Get ConfigurationAccess for the LO user profile."""
+        config_provider = self.smgr.createInstanceWithContext(
+            "com.sun.star.configuration.ConfigurationProvider",
+            self.ctx)
+        node_path = PropertyValue()
+        node_path.Name = "nodepath"
+        node_path.Value = "/org.openoffice.UserProfile/Data"
+        mode = ("com.sun.star.configuration.ConfigurationUpdateAccess"
+                if writable else
+                "com.sun.star.configuration.ConfigurationAccess")
+        return config_provider.createInstanceWithArguments(
+            mode, (node_path,))
+
+    def get_lo_author_parts(self):
+        """Return (givenname, sn, initials) from the LO user profile."""
+        try:
+            access = self._user_profile_access()
+            return (access.getByName("givenname") or "",
+                    access.getByName("sn") or "",
+                    access.getByName("initials") or "")
+        except Exception:
+            return ("", "", "")
+
+    def set_lo_author(self, name, initials=None):
+        """Set the LO user identity (affects tracked-change authorship).
+
+        Splits *name* on first space into givenname + sn.
+        """
+        try:
+            parts = name.split(" ", 1)
+            first = parts[0]
+            last = parts[1] if len(parts) > 1 else ""
+            access = self._user_profile_access(writable=True)
+            access.replaceByName("givenname", first)
+            access.replaceByName("sn", last)
+            if initials is not None:
+                access.replaceByName("initials", initials)
+            access.commitChanges()
+            return True
+        except Exception as e:
+            logger.warning("set_lo_author failed: %s", e)
+            return False
+
+    def restore_lo_author(self, saved):
+        """Restore author from a (givenname, sn, initials) tuple."""
+        try:
+            access = self._user_profile_access(writable=True)
+            access.replaceByName("givenname", saved[0])
+            access.replaceByName("sn", saved[1])
+            access.replaceByName("initials", saved[2])
+            access.commitChanges()
+        except Exception as e:
+            logger.warning("restore_lo_author failed: %s", e)
+
+    def is_recording_changes(self, doc=None):
+        """Check if tracked changes are being recorded."""
+        try:
+            if doc is None:
+                doc = self.get_active_document()
+            if doc is None:
+                return False
+            return bool(doc.getPropertyValue("RecordChanges"))
+        except Exception:
+            return False
+
+    def get_redline_ids(self, doc):
+        """Return a set of redline identifiers currently in the document."""
+        ids = set()
+        try:
+            redlines = doc.getRedlines()
+            enum = redlines.createEnumeration()
+            while enum.hasMoreElements():
+                rl = enum.nextElement()
+                try:
+                    ids.add(rl.getPropertyValue("RedlineIdentifier"))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return ids
+
+    def set_new_redline_comments(self, doc, old_ids, comment):
+        """Set comment on redlines that were NOT in *old_ids*."""
+        try:
+            redlines = doc.getRedlines()
+            enum = redlines.createEnumeration()
+            tagged = 0
+            while enum.hasMoreElements():
+                rl = enum.nextElement()
+                try:
+                    rl_id = rl.getPropertyValue("RedlineIdentifier")
+                    if rl_id not in old_ids:
+                        rl.setPropertyValue("RedlineComment", comment)
+                        tagged += 1
+                except Exception:
+                    pass
+            return tagged
+        except Exception:
+            return 0

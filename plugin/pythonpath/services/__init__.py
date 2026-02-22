@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 class ServiceRegistry:
     """Holds every domain service; passed to McpTool constructors."""
 
+    batch_mode = False  # suppress caches/indexing during batch
+
     def __init__(self):
         # Core infrastructure (must be first)
         self.base = BaseService()

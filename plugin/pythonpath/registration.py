@@ -233,6 +233,39 @@ def _stop_tunnel_process():
     _tunnel_state["public_url"] = None
 
 
+_tunnel_start_lock = threading.Lock()
+
+
+def _auto_start_tunnel():
+    """Auto-start tunnel after MCP server is ready (background thread).
+
+    Waits up to 15 s for the MCP server, then dispatches to the
+    provider-specific tunnel start via a headless MCPExtension
+    (ctx=None → msgbox calls become log entries).
+    """
+    import time
+    for _ in range(15):
+        if _mcp_state["started"]:
+            break
+        time.sleep(1)
+    if not _mcp_state["started"]:
+        logger.warning("Auto-start tunnel: server not ready after 15 s")
+        return
+    if not _tunnel_start_lock.acquire(blocking=False):
+        return  # Another thread already starting
+    try:
+        if _tunnel_state["process"] is not None:
+            return
+        logger.info("Auto-starting tunnel (provider=%s)",
+                    _config.get("tunnel_provider", "tailscale"))
+        handler = MCPExtension(None)
+        handler._do_start_tunnel()
+    except Exception as e:
+        logger.error("Auto-start tunnel failed: %s", e)
+    finally:
+        _tunnel_start_lock.release()
+
+
 # ── Port / zombie management ─────────────────────────────────────────────────
 
 
@@ -834,9 +867,9 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             scheme = "https" if _config.get("enable_ssl", True) else "http"
             _msgbox(self.ctx, "MCP Server",
                     f"MCP server started.\n{scheme}://{host}:{port}")
-            # Auto-start tunnel if enabled
+            # Auto-start tunnel if enabled (in background thread)
             if _config.get("enable_tunnel", False) and _tunnel_state["process"] is None:
-                self._do_start_tunnel()
+                threading.Thread(target=self._do_start_tunnel, daemon=True).start()
         except Exception as e:
             _msgbox(self.ctx, "MCP Error", f"Failed to start:\n{e}")
 
@@ -1623,6 +1656,10 @@ class MCPAutoStartJob(unohelper.Base, XJob, XServiceInfo):
                 threading.Thread(
                     target=_start_mcp_server, daemon=True,
                     name="mcp-job-start").start()
+                if _config.get("enable_tunnel", False):
+                    threading.Thread(
+                        target=_auto_start_tunnel, daemon=True,
+                        name="mcp-job-tunnel").start()
             else:
                 logger.info("AutoStart job: autostart disabled in config")
         except Exception as e:
@@ -1675,6 +1712,8 @@ def _module_autostart():
         logger.info("Module-level auto-start (fallback)")
         try:
             _start_mcp_server()
+            if _config.get("enable_tunnel", False):
+                _auto_start_tunnel()
         except Exception as e:
             logger.error("Module-level auto-start failed: %s", e)
 

@@ -202,7 +202,11 @@ class SetWorkflowStatus(McpTool):
 
 class DeleteDocumentComment(McpTool):
     name = "delete_comment"
-    description = "Delete a comment and all its replies."
+    description = (
+        "Delete comments by name or author. "
+        "Use author='MCP-BATCH' to clean up batch stop comments. "
+        "Use author='MCP-WORKFLOW' to clean up workflow comments."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -210,14 +214,21 @@ class DeleteDocumentComment(McpTool):
                 "type": "string",
                 "description": "Name/ID of the comment to delete",
             },
+            "author": {
+                "type": "string",
+                "description": (
+                    "Delete ALL comments by this author "
+                    "(e.g. 'MCP-BATCH', 'MCP-WORKFLOW')"
+                ),
+            },
             "file_path": {
                 "type": "string",
                 "description": "Absolute path to the document (optional)",
             },
         },
-        "required": ["comment_name"],
     }
 
-    def execute(self, comment_name, file_path=None, **_):
+    def execute(self, comment_name=None, author=None,
+                file_path=None, **_):
         return self.services.comments.delete_comment(
-            comment_name, file_path)
+            comment_name, author, file_path)

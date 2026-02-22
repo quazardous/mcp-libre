@@ -21,7 +21,7 @@
                   dlg:tab-index="1"
                   dlg:left="12" dlg:top="22"
                   dlg:width="200" dlg:height="12"
-                  dlg:value="Enable tunnel (expose server publicly)"
+                  dlg:value="Auto-start tunnel with MCP server"
                   dlg:checked="false"/>
 
     <!-- Provider label + dropdown -->

@@ -33,35 +33,63 @@ class SearchService:
                         "total_found": 0}
 
             total_found = found.getCount()
-            para_ranges = self._writer.get_paragraph_ranges(doc)
             text_obj = doc.getText()
+
+            # Build paragraph list once (needed for index lookup
+            # and context), but only read text for paragraphs we
+            # actually need (lazy).
+            para_ranges = self._writer.get_paragraph_ranges(doc)
+            para_count = len(para_ranges)
             bookmark_map = self._writer.tree.get_mcp_bookmark_map(doc)
 
-            para_texts = []
-            text_enum = text_obj.createEnumeration()
-            while text_enum.hasMoreElements():
-                el = text_enum.nextElement()
-                if el.supportsService("com.sun.star.text.Paragraph"):
-                    para_texts.append(el.getString())
-                else:
-                    para_texts.append("[Table]")
+            # Collect which paragraph indices we need text for
+            limit = min(total_found, max_results)
+            match_indices = []
+            needed_paras = set()
+            for i in range(limit):
+                match_range = found.getByIndex(i)
+                idx = self._writer.find_paragraph_for_range(
+                    match_range, para_ranges, text_obj)
+                match_indices.append((i, match_range, idx))
+                ctx_lo = max(0, idx - context_paragraphs)
+                ctx_hi = min(para_count, idx + context_paragraphs + 1)
+                for j in range(ctx_lo, ctx_hi):
+                    needed_paras.add(j)
+
+            # Read only the paragraphs we need
+            para_texts = {}
+            if needed_paras:
+                text_enum = text_obj.createEnumeration()
+                pidx = 0
+                max_needed = max(needed_paras)
+                while text_enum.hasMoreElements():
+                    el = text_enum.nextElement()
+                    if pidx in needed_paras:
+                        if el.supportsService(
+                                "com.sun.star.text.Paragraph"):
+                            para_texts[pidx] = el.getString()
+                        else:
+                            para_texts[pidx] = "[Table]"
+                    pidx += 1
+                    if pidx > max_needed:
+                        break
 
             results = []
-            for i in range(min(total_found, max_results)):
-                match_range = found.getByIndex(i)
+            for i, match_range, match_para_idx in match_indices:
                 match_text = match_range.getString()
-                match_para_idx = self._writer.find_paragraph_for_range(
-                    match_range, para_ranges, text_obj)
-                ctx_start = max(0, match_para_idx - context_paragraphs)
-                ctx_end = min(len(para_texts),
+                ctx_start = max(0,
+                                match_para_idx - context_paragraphs)
+                ctx_end = min(para_count,
                               match_para_idx + context_paragraphs + 1)
-                context = [{"index": j, "text": para_texts[j]}
-                           for j in range(ctx_start, ctx_end)]
+                context = [{"index": j,
+                             "text": para_texts.get(j, "")}
+                            for j in range(ctx_start, ctx_end)]
                 entry = {"match_index": i, "match_text": match_text,
                          "paragraph_index": match_para_idx,
                          "context": context}
-                nearest = self._writer.tree.find_nearest_heading_bookmark(
-                    match_para_idx, bookmark_map)
+                nearest = (self._writer.tree
+                           .find_nearest_heading_bookmark(
+                               match_para_idx, bookmark_map))
                 if nearest:
                     entry["nearest_heading"] = nearest
                 results.append(entry)

@@ -96,9 +96,11 @@ class CommentService:
     def add_comment(self, content: str, author: str = "AI Agent",
                     paragraph_index: int = None,
                     locator: str = None,
+                    name: str = None,
                     file_path: str = None) -> Dict[str, Any]:
         """Add a comment at a paragraph."""
         try:
+            import uuid as _uuid
             doc = self._base.resolve_document(file_path)
 
             if locator is not None and paragraph_index is None:
@@ -114,10 +116,14 @@ class CommentService:
                 return {"success": False,
                         "error": f"Paragraph {paragraph_index} not found"}
 
+            # Generate unique name if not provided
+            comment_name = name or ("__mcp_%s" % _uuid.uuid4().hex[:8])
+
             annotation = doc.createInstance(
                 "com.sun.star.text.textfield.Annotation")
             annotation.setPropertyValue("Author", author)
             annotation.setPropertyValue("Content", content)
+            annotation.setPropertyValue("Name", comment_name)
 
             doc_text = doc.getText()
             cursor = doc_text.createTextCursorByRange(target.getStart())
@@ -127,6 +133,7 @@ class CommentService:
                 self._base.store_doc(doc)
 
             return {"success": True,
+                    "comment_name": comment_name,
                     "message": f"Comment added at paragraph {paragraph_index}",
                     "author": author}
         except Exception as e:
@@ -188,15 +195,23 @@ class CommentService:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def delete_comment(self, comment_name: str,
+    def delete_comment(self, comment_name: str = None,
+                       author: str = None,
                        file_path: str = None) -> Dict[str, Any]:
-        """Delete a comment and all its replies."""
+        """Delete comments by name and/or author.
+
+        comment_name: delete this comment and its replies.
+        author: delete ALL comments by this author.
+        Both can be combined (OR logic).
+        """
         try:
+            if not comment_name and not author:
+                return {"success": False,
+                        "error": "Provide comment_name or author"}
             doc = self._base.resolve_document(file_path)
             fields = doc.getTextFields()
             enum = fields.createEnumeration()
             text_obj = doc.getText()
-            deleted = 0
 
             to_delete = []
             while enum.hasMoreElements():
@@ -207,20 +222,25 @@ class CommentService:
                 try:
                     name = field.getPropertyValue("Name")
                     parent = field.getPropertyValue("ParentName")
+                    field_author = field.getPropertyValue("Author")
                 except Exception:
                     continue
-                if name == comment_name or parent == comment_name:
+                match = False
+                if comment_name and (name == comment_name
+                                     or parent == comment_name):
+                    match = True
+                if author and field_author == author:
+                    match = True
+                if match:
                     to_delete.append(field)
 
             for field in to_delete:
                 text_obj.removeTextContent(field)
-                deleted += 1
 
-            if deleted > 0 and doc.hasLocation():
+            if to_delete and doc.hasLocation():
                 self._base.store_doc(doc)
 
-            return {"success": True, "deleted": deleted,
-                    "comment": comment_name}
+            return {"success": True, "deleted": len(to_delete)}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

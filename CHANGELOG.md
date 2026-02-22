@@ -6,6 +6,29 @@
   Group by Added / Changed / Fixed.
 -->
 
+## [2.4.0] - 2026-02-22
+
+### Added
+- **`execute_batch` tool** — execute multiple tool calls in a single MCP request (one human approval for N operations). Pre-flight validation, stop-on-error, human stop conditions between operations
+- **Batch variables** — `$last`, `$last+N`, `$last.bookmark`, `$step.N`, `$step.N.bookmark` for chaining operations (e.g. insert then edit the new paragraph)
+- **`check_stop_conditions` tool** — standalone check for STOP/CANCEL comments and workflow dashboard phase
+- **Follow mode** on `execute_batch` — `follow='each'` scrolls after every operation, `follow='end'` after the last one
+- **`heading_text:` locator** — address headings by text content (exact, prefix, or substring match). Survives bookmark loss, unlike `bookmark:_mcp_xxx`
+- **Full-text search** — `search_in_document` uses a Snowball-stemmed inverted index (French/English). `search_boolean` for AND/OR/NOT queries. `get_index_stats` for diagnostics
+- **Index prewarm on startup** — full-text index builds automatically when the MCP server starts (via GlobalEventBroadcaster listener), and re-builds when a new document opens
+- **Revision comments** — `execute_batch` and individual tools support `revision_comment` for annotating tracked changes (visible in Manage Track Changes)
+- **`McpTool.validate()`** — base class method for fast parameter validation against JSON schema
+- **Pre-flight validation** — `execute_batch` validates all operations before executing any
+
+### Changed
+- Edit tools (`set_paragraph_text`, `set_paragraph_style`) now return existing `_mcp_` bookmark in results, enabling `$last.bookmark` after edits
+- Bookmark-not-found errors now suggest `heading_text:` locator and list existing bookmarks
+- `delete_comment` supports filtering by `author` (bulk delete agent comments)
+
+### Fixed
+- GlobalEventBroadcaster service name — use `GlobalEventBroadcaster` (not `theGlobalEventBroadcaster`) for compatibility
+- Document listener registration now runs on VCL main thread with retries (was failing silently from background thread)
+
 ## [2.3.2] - 2026-02-22
 
 ### Added

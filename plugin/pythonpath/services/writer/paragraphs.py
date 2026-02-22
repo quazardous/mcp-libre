@@ -5,6 +5,7 @@ Reading, inserting, deleting, modifying paragraph text and style.
 """
 
 import logging
+import uuid
 from typing import Any, Dict, Optional
 
 from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
@@ -22,6 +23,23 @@ class ParagraphService:
     # ==================================================================
     # Helpers
     # ==================================================================
+
+    def _create_bookmark(self, doc, cursor):
+        """Create an _mcp_ bookmark at the cursor's paragraph start.
+
+        Returns the bookmark name, or None on failure.  Instant (~0ms).
+        """
+        try:
+            bm_name = "_mcp_%s" % uuid.uuid4().hex[:8]
+            bookmark = doc.createInstance("com.sun.star.text.Bookmark")
+            bookmark.Name = bm_name
+            text = doc.getText()
+            bm_cursor = text.createTextCursorByRange(cursor)
+            bm_cursor.gotoStartOfParagraph(False)
+            text.insertTextContent(bm_cursor, bookmark, False)
+            return bm_name
+        except Exception:
+            return None
 
     def _is_inside_index(self, paragraph) -> Optional[str]:
         """Check if paragraph is inside a document index (ToC, etc.)."""
@@ -212,14 +230,26 @@ class ParagraphService:
                 return {"success": False,
                         "error": f"Invalid position: {position}"}
 
+            # Calculate the index of the newly created paragraph
+            if position == "before":
+                new_para_index = paragraph_index
+            else:
+                new_para_index = paragraph_index + 1
+
+            # Bookmark the new paragraph (cursor is on it)
+            bm_name = self._create_bookmark(doc, cursor)
+
             self._writer.invalidate_caches(doc)
             if doc.hasLocation():
                 self._base.store_doc(doc)
 
             result = {"success": True,
+                      "paragraph_index": new_para_index,
                       "message": f"Inserted text {position} paragraph "
                                  f"{paragraph_index}",
                       "text_length": len(text)}
+            if bm_name:
+                result["bookmark"] = bm_name
             if style:
                 result["style"] = style
             return result
@@ -292,14 +322,28 @@ class ParagraphService:
                 return {"success": False,
                         "error": f"Invalid position: {position}"}
 
+            # Index of last inserted paragraph
+            n = len(paragraphs)
+            if position == "before":
+                last_para_index = paragraph_index + n - 1
+            else:
+                last_para_index = paragraph_index + n
+
+            # Bookmark the last inserted paragraph (cursor is on it)
+            bm_name = self._create_bookmark(doc, cursor)
+
             self._writer.invalidate_caches(doc)
             if doc.hasLocation():
                 self._base.store_doc(doc)
 
-            return {"success": True,
-                    "message": f"Inserted {len(paragraphs)} paragraphs "
-                               f"{position} paragraph {paragraph_index}",
-                    "count": len(paragraphs)}
+            result = {"success": True,
+                      "paragraph_index": last_para_index,
+                      "message": f"Inserted {n} paragraphs "
+                                 f"{position} paragraph {paragraph_index}",
+                      "count": n}
+            if bm_name:
+                result["bookmark"] = bm_name
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -384,8 +428,13 @@ class ParagraphService:
             if doc.hasLocation():
                 self._base.store_doc(doc)
 
-            return {"success": True, "paragraph_index": paragraph_index,
-                    "old_length": len(old_text), "new_length": len(text)}
+            result = {"success": True, "paragraph_index": paragraph_index,
+                      "old_length": len(old_text), "new_length": len(text)}
+            # Include existing bookmark so batch $last.bookmark works
+            bm_map = self._writer.tree.get_mcp_bookmark_map(doc)
+            if paragraph_index in bm_map:
+                result["bookmark"] = bm_map[paragraph_index]
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -421,8 +470,13 @@ class ParagraphService:
             if doc.hasLocation():
                 self._base.store_doc(doc)
 
-            return {"success": True, "paragraph_index": paragraph_index,
-                    "old_style": old_style, "new_style": style_name}
+            result = {"success": True, "paragraph_index": paragraph_index,
+                      "old_style": old_style, "new_style": style_name}
+            # Include existing bookmark so batch $last.bookmark works
+            bm_map = self._writer.tree.get_mcp_bookmark_map(doc)
+            if paragraph_index in bm_map:
+                result["bookmark"] = bm_map[paragraph_index]
+            return result
         except Exception as e:
             return {"success": False, "error": str(e)}
 

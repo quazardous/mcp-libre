@@ -80,7 +80,64 @@ class StructuralService:
                 node = children[part - 1]
             return {"para_index": node["para_index"]}
 
+        if loc_type == "heading_text":
+            result = self._find_heading_by_text(doc, loc_value)
+            if result is None:
+                raise ValueError(
+                    f"No heading matching '{loc_value}' found")
+            return {"para_index": result["para_index"]}
+
         raise ValueError(f"Unknown Writer locator type: '{loc_type}'")
+
+    # ==================================================================
+    # Heading text search
+    # ==================================================================
+
+    def _find_heading_by_text(self, doc, search_text: str):
+        """Find a heading by text content (case-insensitive).
+
+        Tries exact match first, then prefix match, then substring.
+        Returns {para_index, text, level, bookmark} or None.
+        """
+        tree = self._writer.tree.build_heading_tree(doc)
+        bookmark_map = self._writer.tree.get_mcp_bookmark_map(doc)
+        headings = self._flatten_headings(tree)
+
+        search_lower = search_text.lower().strip()
+        if not search_lower:
+            return None
+
+        # Pass 1: exact match (case-insensitive)
+        for h in headings:
+            if h["text"].lower().strip() == search_lower:
+                h["bookmark"] = bookmark_map.get(h["para_index"])
+                return h
+
+        # Pass 2: prefix match
+        for h in headings:
+            if h["text"].lower().strip().startswith(search_lower):
+                h["bookmark"] = bookmark_map.get(h["para_index"])
+                return h
+
+        # Pass 3: substring match
+        for h in headings:
+            if search_lower in h["text"].lower():
+                h["bookmark"] = bookmark_map.get(h["para_index"])
+                return h
+
+        return None
+
+    def _flatten_headings(self, node):
+        """Flatten heading tree to a list of {text, para_index, level}."""
+        result = []
+        for child in node.get("children", []):
+            result.append({
+                "text": child["text"],
+                "para_index": child["para_index"],
+                "level": child["level"],
+            })
+            result.extend(self._flatten_headings(child))
+        return result
 
     # ==================================================================
     # Bookmark resolution
@@ -99,8 +156,20 @@ class StructuralService:
 
             bookmarks = doc.getBookmarks()
             if not bookmarks.hasByName(bookmark_name):
-                return {"success": False,
-                        "error": f"Bookmark '{bookmark_name}' not found"}
+                # Provide recovery hints for stale _mcp_ bookmarks
+                hint = (f"Bookmark '{bookmark_name}' not found. "
+                        "It may have been deleted or the document changed.")
+                if bookmark_name.startswith("_mcp_"):
+                    hint += (" Use heading_text:<text> locator for "
+                             "resilient heading addressing, or call "
+                             "get_document_tree to refresh bookmarks.")
+                    # List existing _mcp_ bookmarks as suggestions
+                    existing = [n for n in bookmarks.getElementNames()
+                                if n.startswith("_mcp_")]
+                    if existing:
+                        hint += (" Existing bookmarks: "
+                                 + ", ".join(existing[:10]))
+                return {"success": False, "error": hint}
 
             bm = bookmarks.getByName(bookmark_name)
             anchor = bm.getAnchor()

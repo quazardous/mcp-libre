@@ -19,7 +19,7 @@ class InsertTextAtParagraph(McpTool):
             },
             "locator": {
                 "type": "string",
-                "description": "Unified locator string (preferred)",
+                "description": "Locator: 'paragraph:N', 'bookmark:_mcp_x', 'heading_text:Title'",
             },
             "paragraph_index": {
                 "type": "integer",
@@ -75,7 +75,7 @@ class InsertParagraphsBatch(McpTool):
             },
             "locator": {
                 "type": "string",
-                "description": "Unified locator string (preferred)",
+                "description": "Locator: 'paragraph:N', 'bookmark:_mcp_x', 'heading_text:Title'",
             },
             "paragraph_index": {
                 "type": "integer",
@@ -108,7 +108,7 @@ class DeleteDocumentParagraph(McpTool):
         "properties": {
             "locator": {
                 "type": "string",
-                "description": "Unified locator (e.g. 'paragraph:5', 'bookmark:_mcp_x')",
+                "description": "Locator: 'paragraph:N', 'bookmark:_mcp_x', 'heading_text:Title'",
             },
             "paragraph_index": {
                 "type": "integer",
@@ -129,7 +129,11 @@ class DeleteDocumentParagraph(McpTool):
 
 class SetDocumentParagraphText(McpTool):
     name = "set_paragraph_text"
-    description = "Replace the entire text of a paragraph (preserves style)."
+    description = (
+        "Replace the entire text of a paragraph (preserves style). "
+        "Returns paragraph_index and bookmark (if heading) for use "
+        "with batch $last / $last.bookmark variables."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -139,7 +143,7 @@ class SetDocumentParagraphText(McpTool):
             },
             "locator": {
                 "type": "string",
-                "description": "Unified locator (e.g. 'paragraph:5', 'bookmark:_mcp_x')",
+                "description": "Locator: 'paragraph:N', 'bookmark:_mcp_x', 'heading_text:Title'",
             },
             "paragraph_index": {
                 "type": "integer",
@@ -156,7 +160,8 @@ class SetDocumentParagraphText(McpTool):
     def execute(self, paragraph_index=None, text="", locator=None,
                 file_path=None, **_):
         return self.services.writer.set_paragraph_text(
-            paragraph_index, text, locator, file_path)
+            text=text, paragraph_index=paragraph_index,
+            locator=locator, file_path=file_path)
 
 
 class SetDocumentParagraphStyle(McpTool):
@@ -173,7 +178,7 @@ class SetDocumentParagraphStyle(McpTool):
             },
             "locator": {
                 "type": "string",
-                "description": "Unified locator (e.g. 'paragraph:5', 'bookmark:_mcp_x')",
+                "description": "Locator: 'paragraph:N', 'bookmark:_mcp_x', 'heading_text:Title'",
             },
             "paragraph_index": {
                 "type": "integer",
@@ -204,7 +209,7 @@ class DuplicateDocumentParagraph(McpTool):
         "properties": {
             "locator": {
                 "type": "string",
-                "description": "Unified locator (e.g. 'paragraph:5', 'bookmark:_mcp_x')",
+                "description": "Locator: 'paragraph:N', 'bookmark:_mcp_x', 'heading_text:Title'",
             },
             "paragraph_index": {
                 "type": "integer",

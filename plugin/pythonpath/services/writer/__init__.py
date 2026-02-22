@@ -31,14 +31,16 @@ class WriterService:
         from .search import SearchService
         from .structural import StructuralService
         from .proximity import ProximityService
+        from .index import IndexService
 
         self.tree = TreeService(self)
         self.paragraphs = ParagraphService(self)
         self.search = SearchService(self)
         self.structural = StructuralService(self)
         self.proximity = ProximityService(self)
+        self.index = IndexService(self)
 
-        logger.info("WriterService ready (5 sub-services)")
+        logger.info("WriterService ready (6 sub-services)")
 
     # ==================================================================
     # Shared helpers (used across sub-services)
@@ -101,8 +103,11 @@ class WriterService:
 
     def invalidate_caches(self, doc=None):
         """Invalidate all per-document caches after an edit."""
+        if self._registry.batch_mode:
+            return  # deferred — batch will call once at end
         self.tree.invalidate_cache(doc)
         self.proximity.invalidate_cache(doc)
+        self.index.invalidate_cache(doc)
         self._base.invalidate_page_cache()
 
     # ==================================================================
@@ -151,6 +156,13 @@ class WriterService:
 
     def replace_in_document(self, *a, **kw):
         return self.search.replace_in_document(*a, **kw)
+
+    # -- Full-text index --
+    def search_boolean(self, *a, **kw):
+        return self.index.search_boolean(*a, **kw)
+
+    def get_index_stats(self, *a, **kw):
+        return self.index.get_index_stats(*a, **kw)
 
     # -- AI annotations --
     def add_ai_summary(self, *a, **kw):
