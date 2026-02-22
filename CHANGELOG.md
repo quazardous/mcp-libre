@@ -6,6 +6,11 @@
   Group by Added / Changed / Fixed.
 -->
 
+## [2.3.1] - 2026-02-22
+
+### Added
+- **`verify_ssl` parameter** on `insert_image` and `replace_image` — exposed in tool schema so AI agents can see it (default: `false`, accepts self-signed certs for tunnels and academic/intranet servers)
+
 ## [2.3.0] - 2026-02-22
 
 ### Added

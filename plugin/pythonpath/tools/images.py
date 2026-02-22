@@ -150,6 +150,12 @@ class InsertDocumentImage(McpTool):
                 "type": "integer",
                 "description": "Height in mm (default: 80)",
             },
+            "verify_ssl": {
+                "type": "boolean",
+                "description": "Verify SSL certificates when downloading "
+                               "from URLs (default: false — accepts "
+                               "self-signed certs for tunnels/intranets)",
+            },
             "file_path": {
                 "type": "string",
                 "description": "Absolute path to the document (optional)",
@@ -160,10 +166,10 @@ class InsertDocumentImage(McpTool):
 
     def execute(self, image_path, paragraph_index=None, locator=None,
                 caption=None, with_frame=True, width_mm=None,
-                height_mm=None, file_path=None, **_):
+                height_mm=None, verify_ssl=False, file_path=None, **_):
         return self.services.images.insert_image(
             image_path, paragraph_index, locator, caption,
-            with_frame, width_mm, height_mm, file_path)
+            with_frame, width_mm, height_mm, verify_ssl, file_path)
 
 
 class DeleteDocumentImage(McpTool):
@@ -225,6 +231,12 @@ class ReplaceDocumentImage(McpTool):
                 "type": "integer",
                 "description": "New height in mm (optional, keeps current if omitted)",
             },
+            "verify_ssl": {
+                "type": "boolean",
+                "description": "Verify SSL certificates when downloading "
+                               "from URLs (default: false — accepts "
+                               "self-signed certs for tunnels/intranets)",
+            },
             "file_path": {
                 "type": "string",
                 "description": "Absolute path to the document (optional)",
@@ -234,6 +246,7 @@ class ReplaceDocumentImage(McpTool):
     }
 
     def execute(self, image_name, new_image_path, width_mm=None,
-                height_mm=None, file_path=None, **_):
+                height_mm=None, verify_ssl=False, file_path=None, **_):
         return self.services.images.replace_image(
-            image_name, new_image_path, width_mm, height_mm, file_path)
+            image_name, new_image_path, width_mm, height_mm,
+            verify_ssl, file_path)
