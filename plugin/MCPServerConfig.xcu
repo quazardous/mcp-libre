@@ -21,7 +21,7 @@
         <value>false</value>
       </prop>
       <prop oor:name="Provider" oor:type="xs:string">
-        <value>cloudflared</value>
+        <value>tailscale</value>
       </prop>
       <node oor:name="Bore">
         <prop oor:name="Server" oor:type="xs:string">
@@ -29,6 +29,14 @@
         </prop>
       </node>
       <node oor:name="Cloudflared">
+        <prop oor:name="TunnelName" oor:type="xs:string">
+          <value></value>
+        </prop>
+        <prop oor:name="PublicUrl" oor:type="xs:string">
+          <value></value>
+        </prop>
+      </node>
+      <node oor:name="Tailscale">
       </node>
       <node oor:name="Ngrok">
         <prop oor:name="Authtoken" oor:type="xs:string">

@@ -1,5 +1,52 @@
 # Changelog
 
+<!--
+  Note to contributors: keep entries human-scoped and simple.
+  One line per change, plain language, no internal jargon.
+  Group by Added / Changed / Fixed.
+-->
+
+## [2.3.0] - 2026-02-22
+
+### Added
+- **ChatGPT Desktop support** — MCP server now works with ChatGPT via Tailscale Funnel or cloudflared tunnel
+- **Tailscale Funnel** as default tunnel provider (stable HTTPS URL, no random subdomains)
+- **Image URL support** — `insert_image` and `replace_image` accept HTTP/HTTPS URLs (auto-download)
+- **`clone_heading_block`** — duplicate an entire heading with all its sub-headings and body content
+- **`document_health_check`** — diagnostic tool: empty headings, broken bookmarks, orphan images, heading level skips
+- **`scan_tasks`** — scan comments for actionable prefixes (TODO-AI, FIX, QUESTION, VALIDATION, NOTE) to find tasks without reading the document body
+- **Workflow dashboard** — `get_workflow_status` / `set_workflow_status` use a master comment (author: MCP-WORKFLOW) as a shared project dashboard for multi-agent collaboration
+- **Local proximity navigation** — `navigate_heading` moves between headings locally (next, previous, parent, first_child, siblings) without rescanning the full document
+- **`get_surroundings`** — discover images, tables, frames, comments, and paragraph context within a radius of any locator (one-shot spatial awareness for AI agents)
+- **Multi-agent comments** — `list_comments` gains `author_filter` param to filter by AI agent (ChatGPT, Claude, etc.)
+- **Tunnel settings** split into a dedicated dialog tab with per-provider fields (show/hide based on selection)
+- **Copy MCP URL** button in tunnel and status dialogs (clipboard via LO API)
+- `/sse` and `/messages` endpoints for ChatGPT SSE transport compatibility
+- `Mcp-Session-Id` header on all MCP responses
+- `resources/list` and `prompts/list` handlers (return empty, required by spec)
+
+### Changed
+- **Protocol version** bumped to `2025-11-25` (echoes client's version for compatibility)
+- **`initialize` response** reduced from 20KB to ~400 bytes (was embedding full AGENT.md, now a short instruction string)
+- Tool descriptions rewritten to guide AI toward bookmark-based navigation (ESSENTIAL FIRST CALL, never scan manually)
+- `add_comment` description encourages agents to use their own name as author
+- Tunnel provider list reordered: tailscale first, then cloudflared, bore, ngrok
+- Log file now resets on each LibreOffice restart (`mode="w"`)
+
+### Fixed
+- **No more viewport jumping** — page number lookups, document tree, page objects scan all use `lockControllers` + cursor save/restore (user's view stays where they left it)
+- Bookmark resolution no longer enumerates the document twice (reuses paragraph range list)
+- Tailscale Funnel "listener already exists" error — auto-reset before start and on stop
+- Options dialog crash when detecting tunnel vs server page (`getControl` returns `None`, not exception)
+- Batch JSON-RPC requests (array) now handled correctly on `/mcp` and `/sse`
+
+## [2.2.0] - 2026-02-22
+
+### Added
+- Multi-provider tunnel support (cloudflared, bore, ngrok, tailscale)
+- Cloudflared named tunnel support (stable URL via Cloudflare account)
+- Bore tunnel integration
+
 ## [2.1.2] - 2026-02-21
 
 ### Added

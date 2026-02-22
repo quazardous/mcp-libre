@@ -6,11 +6,11 @@ from .base import McpTool
 class GetDocumentTree(McpTool):
     name = "get_document_tree"
     description = (
-        "Get the heading tree of a document without loading full text. "
-        "Use depth to control how many levels are returned "
-        "(1=top-level only, 2=two levels, 0=full tree). "
-        "Use content_strategy to control body text visibility: "
-        "none, first_lines, ai_summary_first, full."
+        "ESSENTIAL FIRST CALL. Returns the heading tree with stable "
+        "bookmark IDs (_mcp_*) for each heading. Use bookmarks as "
+        "locators in all other tools (e.g. 'bookmark:_mcp_abc123'). "
+        "Bookmarks survive edits — paragraph indexes shift, bookmarks don't. "
+        "Start with depth=1, then drill down with get_heading_children."
     )
     parameters = {
         "type": "object",
@@ -40,10 +40,10 @@ class GetDocumentTree(McpTool):
 class GetHeadingChildren(McpTool):
     name = "get_heading_children"
     description = (
-        "Drill down into a heading to see its children. "
-        "Use locator for unified addressing (e.g. 'bookmark:_mcp_x', "
-        "'heading:2.1', 'paragraph:5'). Legacy params heading_bookmark "
-        "and heading_para_index are still supported."
+        "Drill down into a heading to see its sub-headings and content. "
+        "Use the bookmark from get_document_tree as locator: "
+        "'bookmark:_mcp_abc123'. Returns child headings with their own "
+        "bookmarks for further navigation. Never scan paragraphs manually."
     )
     parameters = {
         "type": "object",
@@ -87,10 +87,10 @@ class GetHeadingChildren(McpTool):
 class ReadDocumentParagraphs(McpTool):
     name = "read_paragraphs"
     description = (
-        "Read specific paragraphs by locator or index range. "
-        "Use get_document_tree first to find which paragraphs to read. "
-        "Locator examples: 'paragraph:0', 'page:2', 'bookmark:_mcp_x', "
-        "'section:Introduction'."
+        "Read paragraphs starting from a bookmark or position. "
+        "Best used with bookmark locators: 'bookmark:_mcp_abc123'. "
+        "Also supports 'paragraph:N', 'page:N', 'section:Name'. "
+        "Use count to limit (default 10). Never read the whole document."
     )
     parameters = {
         "type": "object",

@@ -44,7 +44,12 @@ class ReadDocumentSection(McpTool):
 
 class ListDocumentBookmarks(McpTool):
     name = "list_bookmarks"
-    description = "List all bookmarks in a document."
+    description = (
+        "List all bookmarks (_mcp_* = auto-generated heading anchors). "
+        "Bookmarks are stable IDs that survive edits. "
+        "Use 'bookmark:NAME' as locator in any tool. "
+        "Prefer get_document_tree which includes bookmarks in context."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -62,9 +67,10 @@ class ListDocumentBookmarks(McpTool):
 class ResolveDocumentBookmark(McpTool):
     name = "resolve_bookmark"
     description = (
-        "Resolve a heading bookmark to its current paragraph index. "
-        "Bookmarks are stable identifiers that survive document edits. "
-        "Use this to find the current position of a previously bookmarked heading."
+        "Resolve a bookmark to its current paragraph index and heading text. "
+        "Use when you have a bookmark ID from a previous call and need "
+        "the current position. Most tools accept 'bookmark:NAME' directly "
+        "as locator — use resolve_bookmark only when you need the raw index."
     )
     parameters = {
         "type": "object",

@@ -34,9 +34,16 @@ class StructuralService:
             try:
                 controller = doc.getCurrentController()
                 vc = controller.getViewCursor()
-                vc.jumpToPage(page_num)
-                vc.jumpToStartOfPage()
-                anchor = vc.getStart()
+                saved = doc.getText().createTextCursorByRange(
+                    vc.getStart())
+                doc.lockControllers()
+                try:
+                    vc.jumpToPage(page_num)
+                    vc.jumpToStartOfPage()
+                    anchor = vc.getStart()
+                finally:
+                    vc.gotoRange(saved, False)
+                    doc.unlockControllers()
                 para_ranges = self._writer.get_paragraph_ranges(doc)
                 text_obj = doc.getText()
                 para_idx = self._writer.find_paragraph_for_range(
@@ -102,23 +109,18 @@ class StructuralService:
             para_idx = self._writer.find_paragraph_for_range(
                 anchor, para_ranges, text_obj)
 
+            # Reuse para_ranges to get heading info (no second enum)
             heading_info = {}
-            enum = text_obj.createEnumeration()
-            idx = 0
-            while enum.hasMoreElements():
-                element = enum.nextElement()
-                if idx == para_idx:
-                    if element.supportsService(
-                            "com.sun.star.text.Paragraph"):
-                        try:
-                            heading_info["text"] = element.getString()
-                            heading_info["outline_level"] = \
-                                element.getPropertyValue("OutlineLevel")
-                        except Exception:
-                            pass
-                    break
-                idx += 1
-                self._base.yield_to_gui()
+            if para_idx < len(para_ranges):
+                element = para_ranges[para_idx]
+                if element.supportsService(
+                        "com.sun.star.text.Paragraph"):
+                    try:
+                        heading_info["text"] = element.getString()
+                        heading_info["outline_level"] = \
+                            element.getPropertyValue("OutlineLevel")
+                    except Exception:
+                        pass
 
             return {"success": True, "bookmark": bookmark_name,
                     "para_index": para_idx, **heading_info}
@@ -202,9 +204,15 @@ class StructuralService:
             controller = doc.getCurrentController()
             if controller:
                 vc = controller.getViewCursor()
-                vc.jumpToLastPage()
-                page_count = vc.getPage()
-                vc.jumpToFirstPage()
+                saved = doc.getText().createTextCursorByRange(
+                    vc.getStart())
+                doc.lockControllers()
+                try:
+                    vc.jumpToLastPage()
+                    page_count = vc.getPage()
+                finally:
+                    vc.gotoRange(saved, False)
+                    doc.unlockControllers()
                 return {"success": True, "page_count": page_count}
             return {"success": False,
                     "error": "Could not determine page count"}
@@ -225,7 +233,11 @@ class StructuralService:
     def get_page_objects(self, page: int = None, locator: str = None,
                          paragraph_index: int = None,
                          file_path: str = None) -> Dict[str, Any]:
-        """Get images, tables, and frames on a page."""
+        """Get images, tables, and frames on a page.
+
+        Uses lockControllers + cursor save/restore to prevent
+        visible viewport jumping while scanning objects.
+        """
         try:
             doc = self._base.resolve_document(file_path)
             controller = doc.getCurrentController()
@@ -248,87 +260,99 @@ class StructuralService:
                     page = self._base.get_page_for_paragraph(
                         doc, para_idx)
 
-            images = []
-            if hasattr(doc, "getGraphicObjects"):
-                graphics = doc.getGraphicObjects()
-                for name in graphics.getElementNames():
-                    try:
-                        g = graphics.getByName(name)
-                        anchor = g.getAnchor()
-                        vc.gotoRange(anchor, False)
-                        if vc.getPage() == page:
-                            size = g.getPropertyValue("Size")
-                            images.append({
-                                "name": name,
-                                "width_mm": size.Width // 100,
-                                "height_mm": size.Height // 100,
-                                "title": g.getPropertyValue("Title"),
-                                "paragraph_index":
-                                    self._base.anchor_para_index(
-                                        doc, anchor),
-                            })
-                    except Exception:
-                        pass
+            # Lock display + save cursor to prevent viewport jumping
+            saved = doc.getText().createTextCursorByRange(vc.getStart())
+            doc.lockControllers()
+            try:
+                images = self._scan_page_objects(doc, vc, page)
+            finally:
+                vc.gotoRange(saved, False)
+                doc.unlockControllers()
 
-            tables = []
-            if hasattr(doc, "getTextTables"):
-                text_tables = doc.getTextTables()
-                for name in text_tables.getElementNames():
-                    try:
-                        t = text_tables.getByName(name)
-                        anchor = t.getAnchor()
-                        vc.gotoRange(anchor, False)
-                        if vc.getPage() == page:
-                            tables.append({
-                                "name": name,
-                                "rows": t.getRows().getCount(),
-                                "cols": t.getColumns().getCount(),
-                            })
-                    except Exception:
-                        pass
-
-            frames = []
-            if hasattr(doc, "getTextFrames"):
-                text_frames = doc.getTextFrames()
-                frame_images = {}
-                for img in images:
-                    iname = img["name"]
-                    try:
-                        g = doc.getGraphicObjects().getByName(iname)
-                        anchor_text = g.getAnchor().getText()
-                        for fname in text_frames.getElementNames():
-                            fr = text_frames.getByName(fname)
-                            if fr.getText() == anchor_text:
-                                frame_images.setdefault(
-                                    fname, []).append(iname)
-                                break
-                    except Exception:
-                        pass
-                for fname in text_frames.getElementNames():
-                    try:
-                        fr = text_frames.getByName(fname)
-                        anchor = fr.getAnchor()
-                        vc.gotoRange(anchor, False)
-                        if vc.getPage() == page:
-                            size = fr.getPropertyValue("Size")
-                            entry = {
-                                "name": fname,
-                                "width_mm": size.Width // 100,
-                                "height_mm": size.Height // 100,
-                                "paragraph_index":
-                                    self._base.anchor_para_index(
-                                        doc, anchor),
-                            }
-                            if fname in frame_images:
-                                entry["images"] = frame_images[fname]
-                            frames.append(entry)
-                    except Exception:
-                        pass
-
-            return {"success": True, "page": page,
-                    "images": images, "tables": tables, "frames": frames}
+            return {"success": True, "page": page, **images}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _scan_page_objects(self, doc, vc, page):
+        """Scan page objects (called with controllers locked)."""
+        images = []
+        if hasattr(doc, "getGraphicObjects"):
+            graphics = doc.getGraphicObjects()
+            for name in graphics.getElementNames():
+                try:
+                    g = graphics.getByName(name)
+                    anchor = g.getAnchor()
+                    vc.gotoRange(anchor, False)
+                    if vc.getPage() == page:
+                        size = g.getPropertyValue("Size")
+                        images.append({
+                            "name": name,
+                            "width_mm": size.Width // 100,
+                            "height_mm": size.Height // 100,
+                            "title": g.getPropertyValue("Title"),
+                            "paragraph_index":
+                                self._base.anchor_para_index(
+                                    doc, anchor),
+                        })
+                except Exception:
+                    pass
+
+        tables = []
+        if hasattr(doc, "getTextTables"):
+            text_tables = doc.getTextTables()
+            for name in text_tables.getElementNames():
+                try:
+                    t = text_tables.getByName(name)
+                    anchor = t.getAnchor()
+                    vc.gotoRange(anchor, False)
+                    if vc.getPage() == page:
+                        tables.append({
+                            "name": name,
+                            "rows": t.getRows().getCount(),
+                            "cols": t.getColumns().getCount(),
+                        })
+                except Exception:
+                    pass
+
+        frames = []
+        if hasattr(doc, "getTextFrames"):
+            text_frames = doc.getTextFrames()
+            frame_images = {}
+            for img in images:
+                iname = img["name"]
+                try:
+                    g = doc.getGraphicObjects().getByName(iname)
+                    anchor_text = g.getAnchor().getText()
+                    for fname in text_frames.getElementNames():
+                        fr = text_frames.getByName(fname)
+                        if fr.getText() == anchor_text:
+                            frame_images.setdefault(
+                                fname, []).append(iname)
+                            break
+                except Exception:
+                    pass
+            for fname in text_frames.getElementNames():
+                try:
+                    fr = text_frames.getByName(fname)
+                    anchor = fr.getAnchor()
+                    vc.gotoRange(anchor, False)
+                    if vc.getPage() == page:
+                        size = fr.getPropertyValue("Size")
+                        entry = {
+                            "name": fname,
+                            "width_mm": size.Width // 100,
+                            "height_mm": size.Height // 100,
+                            "paragraph_index":
+                                self._base.anchor_para_index(
+                                    doc, anchor),
+                        }
+                        if fname in frame_images:
+                            entry["images"] = frame_images[fname]
+                        frames.append(entry)
+                except Exception:
+                    pass
+
+        return {"images": images, "tables": tables, "frames": frames}
 
     # ==================================================================
     # Indexes & fields

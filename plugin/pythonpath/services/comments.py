@@ -225,6 +225,205 @@ class CommentService:
             return {"success": False, "error": str(e)}
 
     # ==================================================================
+    # Task scanning (comment-as-ticket workflow)
+    # ==================================================================
+
+    _TASK_PREFIXES = ("TODO-AI", "FIX", "QUESTION", "VALIDATION", "NOTE")
+
+    def scan_tasks(self, unresolved_only: bool = True,
+                   prefix_filter: str = None,
+                   file_path: str = None) -> Dict[str, Any]:
+        """Scan comments for actionable task prefixes."""
+        try:
+            doc = self._base.resolve_document(file_path)
+            fields = doc.getTextFields()
+            enum = fields.createEnumeration()
+            para_ranges = self._registry.writer.get_paragraph_ranges(doc)
+            text_obj = doc.getText()
+
+            tasks = []
+            while enum.hasMoreElements():
+                field = enum.nextElement()
+                if not field.supportsService(
+                        "com.sun.star.text.textfield.Annotation"):
+                    continue
+
+                # Skip replies
+                try:
+                    parent = field.getPropertyValue("ParentName")
+                    if parent:
+                        continue
+                except Exception:
+                    pass
+
+                content = field.getPropertyValue("Content").strip()
+                if not content:
+                    continue
+
+                # Match prefix
+                matched_prefix = None
+                task_body = content
+                for pfx in self._TASK_PREFIXES:
+                    if content.upper().startswith(pfx):
+                        matched_prefix = pfx
+                        # Strip prefix and separator (colon, dash, space)
+                        rest = content[len(pfx):].lstrip(":- ")
+                        task_body = rest
+                        break
+
+                if matched_prefix is None:
+                    continue
+
+                if prefix_filter and matched_prefix != prefix_filter.upper():
+                    continue
+
+                resolved = False
+                try:
+                    resolved = field.getPropertyValue("Resolved")
+                except Exception:
+                    pass
+
+                if unresolved_only and resolved:
+                    continue
+
+                try:
+                    author = field.getPropertyValue("Author")
+                except Exception:
+                    author = ""
+
+                name = ""
+                try:
+                    name = field.getPropertyValue("Name")
+                except Exception:
+                    pass
+
+                anchor = field.getAnchor()
+                para_idx = self._registry.writer.find_paragraph_for_range(
+                    anchor, para_ranges, text_obj)
+
+                tasks.append({
+                    "prefix": matched_prefix,
+                    "body": task_body,
+                    "author": author,
+                    "resolved": resolved,
+                    "comment_name": name,
+                    "paragraph_index": para_idx,
+                })
+
+            return {"success": True, "tasks": tasks,
+                    "count": len(tasks)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==================================================================
+    # Workflow status (master dashboard comment)
+    # ==================================================================
+
+    _WORKFLOW_AUTHOR = "MCP-WORKFLOW"
+
+    def get_workflow_status(self,
+                            file_path: str = None) -> Dict[str, Any]:
+        """Read the master workflow dashboard comment."""
+        try:
+            doc = self._base.resolve_document(file_path)
+            fields = doc.getTextFields()
+            enum = fields.createEnumeration()
+
+            while enum.hasMoreElements():
+                field = enum.nextElement()
+                if not field.supportsService(
+                        "com.sun.star.text.textfield.Annotation"):
+                    continue
+                try:
+                    author = field.getPropertyValue("Author")
+                except Exception:
+                    continue
+                if author != self._WORKFLOW_AUTHOR:
+                    continue
+
+                content = field.getPropertyValue("Content")
+                name = ""
+                try:
+                    name = field.getPropertyValue("Name")
+                except Exception:
+                    pass
+
+                # Parse key: value lines
+                status = {}
+                for line in content.splitlines():
+                    line = line.strip()
+                    if ":" in line:
+                        k, v = line.split(":", 1)
+                        status[k.strip()] = v.strip()
+
+                return {"success": True, "found": True,
+                        "comment_name": name, "raw": content,
+                        "status": status}
+
+            return {"success": True, "found": False,
+                    "message": "No workflow dashboard comment found. "
+                               "Use set_workflow_status to create one."}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def set_workflow_status(self, content: str,
+                            file_path: str = None) -> Dict[str, Any]:
+        """Create or update the master workflow dashboard comment.
+
+        Content should be key: value lines, e.g.:
+            Phase: Rédaction
+            Images: 3/10 insérées
+            Annexes: En attente
+        """
+        try:
+            doc = self._base.resolve_document(file_path)
+            fields = doc.getTextFields()
+            enum = fields.createEnumeration()
+            existing = None
+
+            while enum.hasMoreElements():
+                field = enum.nextElement()
+                if not field.supportsService(
+                        "com.sun.star.text.textfield.Annotation"):
+                    continue
+                try:
+                    author = field.getPropertyValue("Author")
+                except Exception:
+                    continue
+                if author == self._WORKFLOW_AUTHOR:
+                    existing = field
+                    break
+
+            if existing:
+                existing.setPropertyValue("Content", content)
+                fields.refresh()
+                if doc.hasLocation():
+                    self._base.store_doc(doc)
+                return {"success": True, "action": "updated",
+                        "content": content}
+
+            # Create new at paragraph 0
+            annotation = doc.createInstance(
+                "com.sun.star.text.textfield.Annotation")
+            annotation.setPropertyValue("Author", self._WORKFLOW_AUTHOR)
+            annotation.setPropertyValue("Content", content)
+
+            doc_text = doc.getText()
+            para_enum = doc_text.createEnumeration()
+            if para_enum.hasMoreElements():
+                first_para = para_enum.nextElement()
+                cursor = doc_text.createTextCursorByRange(
+                    first_para.getStart())
+                doc_text.insertTextContent(cursor, annotation, False)
+
+            if doc.hasLocation():
+                self._base.store_doc(doc)
+            return {"success": True, "action": "created",
+                    "content": content}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    # ==================================================================
     # Track Changes
     # ==================================================================
 

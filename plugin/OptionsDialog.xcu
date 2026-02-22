@@ -18,10 +18,24 @@
                         <value>org.mcp.libreoffice.extension</value>
                     </prop>
                     <prop oor:name="Label">
-                        <value xml:lang="en-US">Server Settings</value>
+                        <value xml:lang="en-US">Server</value>
                     </prop>
                     <prop oor:name="OptionsPage">
                         <value>%origin%/dialogs/MCPSettings.xdl</value>
+                    </prop>
+                    <prop oor:name="EventHandlerService">
+                        <value>org.mcp.libreoffice.MCPOptionsHandler</value>
+                    </prop>
+                </node>
+                <node oor:name="org.mcp.libreoffice.tunnel" oor:op="fuse">
+                    <prop oor:name="Id">
+                        <value>org.mcp.libreoffice.tunnel</value>
+                    </prop>
+                    <prop oor:name="Label">
+                        <value xml:lang="en-US">Tunnel</value>
+                    </prop>
+                    <prop oor:name="OptionsPage">
+                        <value>%origin%/dialogs/MCPTunnel.xdl</value>
                     </prop>
                     <prop oor:name="EventHandlerService">
                         <value>org.mcp.libreoffice.MCPOptionsHandler</value>

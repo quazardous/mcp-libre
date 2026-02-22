@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dlg:window PUBLIC "-//OpenOffice.org//DTD OfficeDocument 1.0//EN" "dialog.dtd">
+<dlg:window xmlns:dlg="http://openoffice.org/2000/dialog"
+            xmlns:script="http://openoffice.org/2000/script"
+            dlg:id="MCPTunnel"
+            dlg:left="0" dlg:top="0"
+            dlg:width="260" dlg:height="220"
+            dlg:closeable="true"
+            dlg:withtitlebar="false">
+  <dlg:bulletinboard>
+
+    <!-- Tunnel settings -->
+    <dlg:fixedline dlg:id="TunnelLine"
+                   dlg:tab-index="0"
+                   dlg:left="6" dlg:top="6"
+                   dlg:width="248" dlg:height="8"
+                   dlg:value="Tunnel Settings"/>
+
+    <!-- Enable tunnel checkbox -->
+    <dlg:checkbox dlg:id="TunnelCheck"
+                  dlg:tab-index="1"
+                  dlg:left="12" dlg:top="22"
+                  dlg:width="200" dlg:height="12"
+                  dlg:value="Enable tunnel (expose server publicly)"
+                  dlg:checked="false"/>
+
+    <!-- Provider label + dropdown -->
+    <dlg:text dlg:id="ProviderLabel"
+              dlg:tab-index="2"
+              dlg:left="12" dlg:top="42"
+              dlg:width="45" dlg:height="10"
+              dlg:value="Provider:"/>
+
+    <dlg:menulist dlg:id="TunnelProviderList"
+                  dlg:tab-index="3"
+                  dlg:left="60" dlg:top="40"
+                  dlg:width="100" dlg:height="12"
+                  dlg:spin="true"/>
+
+    <!-- cloudflared: tunnel name (empty = quick tunnel) -->
+    <dlg:text dlg:id="CfTunnelNameLabel"
+              dlg:tab-index="4"
+              dlg:left="12" dlg:top="62"
+              dlg:width="45" dlg:height="10"
+              dlg:value="Tunnel:"/>
+
+    <dlg:textfield dlg:id="CfTunnelNameField"
+                   dlg:tab-index="5"
+                   dlg:left="60" dlg:top="60"
+                   dlg:width="120" dlg:height="12"
+                   dlg:value=""
+                   dlg:help-text="Named tunnel (empty = quick tunnel with random URL)"/>
+
+    <!-- cloudflared: public URL for named tunnel -->
+    <dlg:text dlg:id="CfPublicUrlLabel"
+              dlg:tab-index="6"
+              dlg:left="12" dlg:top="78"
+              dlg:width="45" dlg:height="10"
+              dlg:value="URL:"/>
+
+    <dlg:textfield dlg:id="CfPublicUrlField"
+                   dlg:tab-index="7"
+                   dlg:left="60" dlg:top="76"
+                   dlg:width="180" dlg:height="12"
+                   dlg:value=""
+                   dlg:help-text="Public URL for named tunnel (e.g. https://mcp.example.com)"/>
+
+    <!-- bore: relay server -->
+    <dlg:text dlg:id="TunnelServerLabel"
+              dlg:tab-index="8"
+              dlg:left="12" dlg:top="62"
+              dlg:width="45" dlg:height="10"
+              dlg:value="Server:"/>
+
+    <dlg:textfield dlg:id="TunnelServerField"
+                   dlg:tab-index="9"
+                   dlg:left="60" dlg:top="60"
+                   dlg:width="120" dlg:height="12"
+                   dlg:value="bore.pub"/>
+
+    <!-- ngrok: authtoken -->
+    <dlg:text dlg:id="NgrokTokenLabel"
+              dlg:tab-index="10"
+              dlg:left="12" dlg:top="62"
+              dlg:width="45" dlg:height="10"
+              dlg:value="Token:"/>
+
+    <dlg:textfield dlg:id="NgrokTokenField"
+                   dlg:tab-index="11"
+                   dlg:left="60" dlg:top="60"
+                   dlg:width="180" dlg:height="12"
+                   dlg:value=""/>
+
+    <!-- Info section -->
+    <dlg:fixedline dlg:id="InfoLine"
+                   dlg:tab-index="12"
+                   dlg:left="6" dlg:top="100"
+                   dlg:width="248" dlg:height="8"
+                   dlg:value="Provider Info"/>
+
+    <dlg:text dlg:id="TunnelInfoText"
+              dlg:tab-index="13"
+              dlg:left="12" dlg:top="114"
+              dlg:width="240" dlg:height="90"
+              dlg:multiline="true"
+              dlg:value="cloudflared: no account needed for quick tunnel. Named tunnel = stable URL.&#10;bore: no account needed (github.com/ekzhang/bore/releases)&#10;ngrok: free account + token (ngrok.com/download)&#10;tailscale: Tailscale account + Funnel enabled (tailscale.com/download)&#10;&#10;Fields shown depend on the selected provider."/>
+
+  </dlg:bulletinboard>
+</dlg:window>

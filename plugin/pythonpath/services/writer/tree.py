@@ -384,9 +384,18 @@ class TreeService:
 
             page_count = 0
             try:
-                cursor = text.createTextCursor()
-                cursor.gotoEnd(False)
-                page_count = self._base.get_page_for_range(doc, cursor)
+                controller = doc.getCurrentController()
+                vc = controller.getViewCursor()
+                saved = text.createTextCursorByRange(vc.getStart())
+                doc.lockControllers()
+                try:
+                    cursor = text.createTextCursor()
+                    cursor.gotoEnd(False)
+                    page_count = self._base.get_page_for_range(
+                        doc, cursor)
+                finally:
+                    vc.gotoRange(saved, False)
+                    doc.unlockControllers()
             except Exception:
                 pass
 

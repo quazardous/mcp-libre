@@ -45,6 +45,30 @@ A LibreOffice extension runs an MCP server directly inside LibreOffice (port 876
 
 That's it. Open a document in LibreOffice, then ask Claude to edit it.
 
+## Tunnel (remote access)
+
+To expose LibreOffice MCP to remote AI assistants (ChatGPT, cloud-hosted Claude, etc.), enable the built-in tunnel. The default provider is **Tailscale Funnel** — stable HTTPS URL, no random subdomains, works great with ChatGPT.
+
+### Tailscale Funnel (default)
+
+1. **Install Tailscale**: [tailscale.com/download](https://tailscale.com/download) — or `winget install Tailscale.Tailscale` (Windows) / `brew install tailscale` (macOS)
+2. **Log in**: `tailscale login`
+3. **Enable Funnel** in the [admin console](https://login.tailscale.com/admin/dns): DNS → HTTPS Certificates → Enable, then Funnel → Enable for your device
+4. **In LibreOffice**: MCP Server menu → Settings (Tunnel tab) → check "Enable tunnel" → provider = tailscale → OK
+5. **Restart the server** — menu shows `Stop Tunnel (your-machine.tailnet.ts.net)`
+
+Your MCP endpoint will be `https://your-machine.tailnet.ts.net/sse` — use this in ChatGPT or any remote MCP client.
+
+### Other providers
+
+| Provider | Install | Notes |
+|----------|---------|-------|
+| **cloudflared** | `winget install Cloudflare.cloudflared` | Random URL each time (no account), or stable URL with Cloudflare account |
+| **bore** | [github.com/ekzhang/bore](https://github.com/ekzhang/bore/releases) | Lightweight TCP tunnel, no account needed |
+| **ngrok** | [ngrok.com/download](https://ngrok.com/download) | Requires free account + authtoken |
+
+Switch providers in the Settings dialog (Tunnel tab) — all four are built-in.
+
 ## Tools (67+)
 
 | Category | Examples |

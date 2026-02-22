@@ -4,9 +4,52 @@ ImageService — images, graphic objects, and text frames.
 
 import logging
 import os
+import ssl
+import tempfile
+import urllib.request
+import urllib.error
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _maybe_download(path_or_url: str) -> str:
+    """If path_or_url is an HTTP(S) URL, download to a temp file and return
+    the local path.  Otherwise return the original path unchanged."""
+    parsed = urlparse(path_or_url)
+    if parsed.scheme not in ("http", "https"):
+        return path_or_url
+
+    # Guess extension from URL path
+    ext = os.path.splitext(parsed.path)[1] or ".png"
+    if ext not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp",
+                   ".tiff", ".tif", ".ico"):
+        ext = ".png"
+
+    fd, tmp_path = tempfile.mkstemp(suffix=ext, prefix="mcp_img_")
+    os.close(fd)
+    try:
+        req = urllib.request.Request(path_or_url, headers={
+            "User-Agent": "LibreOffice-MCP/1.0"})
+        # Skip SSL verification — images may come from tunnels or
+        # internal servers with self-signed certs.
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with urllib.request.urlopen(req, timeout=30,
+                                    context=ctx) as resp:
+            with open(tmp_path, "wb") as f:
+                f.write(resp.read())
+        logger.info("Downloaded image %s -> %s", path_or_url, tmp_path)
+        return tmp_path
+    except Exception as e:
+        # Clean up on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise ValueError(f"Failed to download image from {path_or_url}: {e}")
 
 
 class ImageService:
@@ -297,8 +340,13 @@ class ImageService:
                      width_mm: int = None,
                      height_mm: int = None,
                      file_path: str = None) -> Dict[str, Any]:
-        """Insert an image from a file path at a paragraph position."""
+        """Insert an image from a file path or URL at a paragraph position."""
+        is_url = image_path.startswith(("http://", "https://"))
         try:
+            try:
+                image_path = _maybe_download(image_path)
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
             if not os.path.isfile(image_path):
                 return {"success": False,
                         "error": f"Image file not found: {image_path}"}
@@ -389,6 +437,12 @@ class ImageService:
                         "with_frame": False}
         except Exception as e:
             return {"success": False, "error": str(e)}
+        finally:
+            if is_url:
+                try:
+                    os.unlink(image_path)
+                except OSError:
+                    pass
 
     def delete_image(self, image_name: str,
                      remove_frame: bool = True,
@@ -444,7 +498,12 @@ class ImageService:
                       width_mm: int = None, height_mm: int = None,
                       file_path: str = None) -> Dict[str, Any]:
         """Replace an image's graphic source, keeping frame/position."""
+        is_url = new_image_path.startswith(("http://", "https://"))
         try:
+            try:
+                new_image_path = _maybe_download(new_image_path)
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
             if not os.path.isfile(new_image_path):
                 return {"success": False,
                         "error": f"Image file not found: {new_image_path}"}
@@ -486,6 +545,12 @@ class ImageService:
                     "new_source": new_image_path}
         except Exception as e:
             return {"success": False, "error": str(e)}
+        finally:
+            if is_url:
+                try:
+                    os.unlink(new_image_path)
+                except OSError:
+                    pass
 
     # ==================================================================
     # Text Frames

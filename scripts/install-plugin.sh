@@ -155,6 +155,7 @@ build_oxt() {
         "OptionsDialog.xcu"
         "Jobs.xcu"
         "dialogs/MCPSettings.xdl"
+        "dialogs/MCPTunnel.xdl"
         "icons/stopped_16.png"
         "icons/running_16.png"
         "icons/starting_16.png"
@@ -228,6 +229,7 @@ MANIFEST_EOF
     # Dialogs
     mkdir -p "$STAGING_DIR/dialogs"
     cp "$PLUGIN_DIR/dialogs/MCPSettings.xdl" "$STAGING_DIR/dialogs/"
+    cp "$PLUGIN_DIR/dialogs/MCPTunnel.xdl" "$STAGING_DIR/dialogs/"
 
     # Icons
     mkdir -p "$STAGING_DIR/icons"

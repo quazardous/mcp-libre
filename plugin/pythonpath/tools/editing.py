@@ -225,3 +225,36 @@ class DuplicateDocumentParagraph(McpTool):
                 file_path=None, **_):
         return self.services.writer.duplicate_paragraph(
             paragraph_index, locator, count, file_path)
+
+
+class CloneHeadingBlock(McpTool):
+    name = "clone_heading_block"
+    description = (
+        "Clone an entire heading block (heading + all sub-headings + body). "
+        "The clone is inserted right after the original block. "
+        "Use bookmark locator: 'bookmark:_mcp_abc123'. "
+        "Useful for yearly duplication, template blocks, annex generation."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "locator": {
+                "type": "string",
+                "description": "Bookmark of the heading to clone "
+                               "(e.g. 'bookmark:_mcp_abc123')",
+            },
+            "paragraph_index": {
+                "type": "integer",
+                "description": "Paragraph index of the heading (legacy)",
+            },
+            "file_path": {
+                "type": "string",
+                "description": "Absolute path to the document (optional)",
+            },
+        },
+    }
+
+    def execute(self, locator=None, paragraph_index=None,
+                file_path=None, **_):
+        return self.services.writer.clone_heading_block(
+            locator, paragraph_index, file_path)

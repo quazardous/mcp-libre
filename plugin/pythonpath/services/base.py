@@ -286,7 +286,22 @@ class BaseService:
             return None
 
     def annotate_pages(self, nodes: list, doc):
-        """Recursively add 'page' field to heading tree nodes."""
+        """Recursively add 'page' field to heading tree nodes.
+
+        Uses lockControllers + cursor save/restore to prevent
+        visible viewport jumping while resolving page numbers.
+        """
+        controller = doc.getCurrentController()
+        vc = controller.getViewCursor()
+        saved = doc.getText().createTextCursorByRange(vc.getStart())
+        doc.lockControllers()
+        try:
+            self._annotate_pages_inner(nodes, doc)
+        finally:
+            vc.gotoRange(saved, False)
+            doc.unlockControllers()
+
+    def _annotate_pages_inner(self, nodes: list, doc):
         for node in nodes:
             try:
                 pi = node.get("para_index")
@@ -295,7 +310,7 @@ class BaseService:
             except Exception:
                 pass
             if "children" in node:
-                self.annotate_pages(node["children"], doc)
+                self._annotate_pages_inner(node["children"], doc)
 
     # ------------------------------------------------------------------
     # Document type helpers

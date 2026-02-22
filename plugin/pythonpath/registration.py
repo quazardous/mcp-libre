@@ -26,7 +26,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(_log_path, encoding="utf-8"),
+        logging.FileHandler(_log_path, mode="w", encoding="utf-8"),
     ],
 )
 logger = logging.getLogger("mcp-extension")
@@ -59,8 +59,10 @@ _DEFAULT_CONFIG = {
     "host": "localhost",
     "enable_ssl": True,
     "enable_tunnel": False,
-    "tunnel_provider": "cloudflared",
+    "tunnel_provider": "tailscale",
     "tunnel_server": "bore.pub",
+    "cf_tunnel_name": "",
+    "cf_public_url": "",
     "ngrok_authtoken": "",
 }
 
@@ -100,6 +102,13 @@ def _read_lo_config():
             except Exception:
                 cfg["tunnel_server"] = "bore.pub"
             try:
+                cf = tunnel.getByName("Cloudflared")
+                cfg["cf_tunnel_name"] = str(cf.getPropertyValue("TunnelName"))
+                cfg["cf_public_url"] = str(cf.getPropertyValue("PublicUrl"))
+            except Exception:
+                cfg["cf_tunnel_name"] = ""
+                cfg["cf_public_url"] = ""
+            try:
                 ngrok = tunnel.getByName("Ngrok")
                 cfg["ngrok_authtoken"] = str(ngrok.getPropertyValue("Authtoken"))
             except Exception:
@@ -107,8 +116,10 @@ def _read_lo_config():
         except Exception:
             # Fallback for old flat schema
             cfg["enable_tunnel"] = False
-            cfg["tunnel_provider"] = "cloudflared"
+            cfg["tunnel_provider"] = "tailscale"
             cfg["tunnel_server"] = "bore.pub"
+            cfg["cf_tunnel_name"] = ""
+            cfg["cf_public_url"] = ""
             cfg["ngrok_authtoken"] = ""
 
         access.dispose()
@@ -148,7 +159,7 @@ def _write_lo_config(values):
 
         # Tunnel sub-group
         tunnel_keys = {"enable_tunnel", "tunnel_provider", "tunnel_server",
-                       "ngrok_authtoken"}
+                       "cf_tunnel_name", "cf_public_url", "ngrok_authtoken"}
         if tunnel_keys & values.keys():
             tunnel = update.getByName("Tunnel")
             if "enable_tunnel" in values:
@@ -158,6 +169,12 @@ def _write_lo_config(values):
             if "tunnel_server" in values:
                 bore = tunnel.getByName("Bore")
                 bore.setPropertyValue("Server", values["tunnel_server"])
+            if "cf_tunnel_name" in values or "cf_public_url" in values:
+                cf = tunnel.getByName("Cloudflared")
+                if "cf_tunnel_name" in values:
+                    cf.setPropertyValue("TunnelName", values["cf_tunnel_name"])
+                if "cf_public_url" in values:
+                    cf.setPropertyValue("PublicUrl", values["cf_public_url"])
             if "ngrok_authtoken" in values:
                 ngrok = tunnel.getByName("Ngrok")
                 ngrok.setPropertyValue("Authtoken", values["ngrok_authtoken"])
@@ -202,6 +219,16 @@ def _stop_tunnel_process():
             proc.wait(timeout=3)
     except Exception as e:
         logger.warning(f"Error stopping tunnel: {e}")
+    # Reset Tailscale Funnel config (persists in daemon after process dies)
+    if _config.get("tunnel_provider") == "tailscale":
+        try:
+            _subprocess.run(
+                ["tailscale", "funnel", "reset"],
+                capture_output=True, text=True, timeout=5,
+                creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass
     _tunnel_state["process"] = None
     _tunnel_state["public_url"] = None
 
@@ -581,6 +608,122 @@ def _msgbox(ctx, title, message):
         logger.info(f"MSGBOX fallback - {title}: {message} (error: {e})")
 
 
+def _copy_to_clipboard(ctx, text):
+    """Copy text to system clipboard via LO API."""
+    try:
+        from com.sun.star.datatransfer import DataFlavor
+        smgr = ctx.ServiceManager
+        clip = smgr.createInstanceWithContext(
+            "com.sun.star.datatransfer.clipboard.SystemClipboard", ctx)
+
+        class _TextTransferable(unohelper.Base,
+                                __import__('com.sun.star.datatransfer',
+                                           fromlist=['XTransferable'])
+                                .XTransferable):
+            def __init__(self, txt):
+                self._text = txt
+
+            def getTransferData(self, flavor):
+                return self._text
+
+            def getTransferDataFlavors(self):
+                f = DataFlavor()
+                f.MimeType = "text/plain;charset=utf-16"
+                f.HumanPresentableName = "Unicode Text"
+                f.DataType = uno.getTypeByName("string")
+                return (f,)
+
+            def isDataFlavorSupported(self, flavor):
+                return "text/plain" in flavor.MimeType
+
+        clip.setContents(_TextTransferable(text), None)
+        logger.info(f"Copied to clipboard: {text}")
+        return True
+    except Exception as e:
+        logger.error(f"Clipboard copy failed: {e}")
+        return False
+
+
+def _msgbox_with_copy(ctx, title, message, copy_text):
+    """Show a dialog with message + Copy URL button."""
+    try:
+        smgr = ctx.ServiceManager
+
+        dlg_model = smgr.createInstanceWithContext(
+            "com.sun.star.awt.UnoControlDialogModel", ctx)
+        dlg_model.Title = title
+        dlg_model.Width = 250
+        dlg_model.Height = 80
+
+        lbl = dlg_model.createInstance(
+            "com.sun.star.awt.UnoControlFixedTextModel")
+        lbl.Name = "Msg"
+        lbl.PositionX = 10
+        lbl.PositionY = 6
+        lbl.Width = 230
+        lbl.Height = 42
+        lbl.MultiLine = True
+        lbl.Label = message
+        dlg_model.insertByName("Msg", lbl)
+
+        copy_btn = dlg_model.createInstance(
+            "com.sun.star.awt.UnoControlButtonModel")
+        copy_btn.Name = "CopyBtn"
+        copy_btn.PositionX = 10
+        copy_btn.PositionY = 56
+        copy_btn.Width = 75
+        copy_btn.Height = 14
+        copy_btn.Label = "Copy MCP URL"
+        dlg_model.insertByName("CopyBtn", copy_btn)
+
+        ok_btn = dlg_model.createInstance(
+            "com.sun.star.awt.UnoControlButtonModel")
+        ok_btn.Name = "OKBtn"
+        ok_btn.PositionX = 190
+        ok_btn.PositionY = 56
+        ok_btn.Width = 50
+        ok_btn.Height = 14
+        ok_btn.Label = "OK"
+        ok_btn.PushButtonType = 1  # OK
+        dlg_model.insertByName("OKBtn", ok_btn)
+
+        dlg = smgr.createInstanceWithContext(
+            "com.sun.star.awt.UnoControlDialog", ctx)
+        dlg.setModel(dlg_model)
+        toolkit = smgr.createInstanceWithContext(
+            "com.sun.star.awt.Toolkit", ctx)
+        dlg.createPeer(toolkit, None)
+
+        class _CopyListener(unohelper.Base,
+                            __import__('com.sun.star.awt',
+                                       fromlist=['XActionListener'])
+                            .XActionListener):
+            def __init__(self, dialog, context, text):
+                self._dlg = dialog
+                self._ctx = context
+                self._text = text
+
+            def actionPerformed(self, ev):
+                if _copy_to_clipboard(self._ctx, self._text):
+                    try:
+                        self._dlg.getModel().getByName("CopyBtn").Label = \
+                            "Copied!"
+                    except Exception:
+                        pass
+
+            def disposing(self, ev):
+                pass
+
+        dlg.getControl("CopyBtn").addActionListener(
+            _CopyListener(dlg, ctx, copy_text))
+
+        dlg.execute()
+        dlg.dispose()
+    except Exception as e:
+        logger.error(f"Copy dialog error: {e}")
+        _msgbox(ctx, title, message)
+
+
 # ── Protocol handler (dispatches menu clicks) ────────────────────────────────
 
 class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
@@ -732,13 +875,15 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
 
     def _do_start_tunnel(self):
         """Start tunnel — dispatches to provider-specific method."""
-        provider = _config.get("tunnel_provider", "cloudflared")
+        provider = _config.get("tunnel_provider", "tailscale")
         if provider == "bore":
             self._do_start_tunnel_bore()
         elif provider == "cloudflared":
             self._do_start_tunnel_cloudflared()
         elif provider == "ngrok":
             self._do_start_tunnel_ngrok()
+        elif provider == "tailscale":
+            self._do_start_tunnel_tailscale()
         else:
             _msgbox(self.ctx, "MCP Server",
                     f"Unknown tunnel provider: {provider}")
@@ -799,14 +944,15 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                     _notify_all_listeners()
                     # Build display URL — bore gives host:port, others give full URL
                     if public_url.startswith("http"):
-                        mcp_url = f"{public_url}/mcp"
+                        base_url = public_url
                     else:
                         scheme = "https" if _config.get("enable_ssl", True) else "http"
-                        mcp_url = f"{scheme}://{public_url}/mcp"
-                    _msgbox(self.ctx, "MCP Server",
+                        base_url = f"{scheme}://{public_url}"
+                    _msgbox_with_copy(self.ctx, "MCP Server",
                             f"Tunnel active!\n\n"
-                            f"{mcp_url}\n\n"
-                            f"Use this URL in ChatGPT Desktop.")
+                            f"ChatGPT:      {base_url}/sse\n"
+                            f"Claude Code:  {base_url}/mcp",
+                            f"{base_url}/sse")
 
             rc = proc.wait()
             if _tunnel_state["process"] is proc:
@@ -840,18 +986,46 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             r"listening at ([\w.\-]+:\d+)")
 
     def _do_start_tunnel_cloudflared(self):
-        """Start cloudflared quick tunnel."""
+        """Start cloudflared tunnel (quick or named)."""
         if not self._tunnel_check_binary(
                 "cloudflared", ["cloudflared", "--version"],
                 "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/"):
             return
         port, scheme = self._tunnel_ensure_server()
-        logger.info(f"Starting cloudflared tunnel: {scheme}://localhost:{port}")
-        self._tunnel_run_and_parse(
-            ["cloudflared", "tunnel", "--no-autoupdate",
-             "--url", f"{scheme}://localhost:{port}", "--no-tls-verify"],
-            "cloudflared",
-            r"(https://[\w-]+\.trycloudflare\.com)")
+
+        tunnel_name = _config.get("cf_tunnel_name", "").strip()
+        public_url = _config.get("cf_public_url", "").strip()
+
+        if tunnel_name:
+            # Named tunnel — stable URL via Cloudflare account + domain
+            logger.info(f"Starting cloudflared named tunnel '{tunnel_name}': "
+                        f"{scheme}://localhost:{port}")
+            cmd = ["cloudflared", "tunnel", "--no-autoupdate", "run", tunnel_name]
+            if public_url:
+                # URL is known from config, set it directly
+                _tunnel_state["public_url"] = public_url.rstrip("/")
+                _notify_all_listeners()
+                _msgbox_with_copy(self.ctx, "MCP Server",
+                        f"Named tunnel '{tunnel_name}' starting...\n\n"
+                        f"ChatGPT:      {public_url}/sse\n"
+                        f"Claude Code:  {public_url}/mcp",
+                        f"{public_url}/sse")
+            # Run tunnel in background thread (no URL parsing needed
+            # for named tunnels with known public URL)
+            self._tunnel_run_and_parse(
+                cmd, f"cloudflared[{tunnel_name}]",
+                # Named tunnels log "Connection ... registered" but not a public URL.
+                # If public_url is set, this regex won't match — that's OK.
+                # If public_url is NOT set, try to catch any https:// URL in output.
+                r"(https://[\w.-]+\.\w{2,})" if not public_url else r"(?!)")
+        else:
+            # Quick tunnel — random trycloudflare.com URL
+            logger.info(f"Starting cloudflared quick tunnel: {scheme}://localhost:{port}")
+            self._tunnel_run_and_parse(
+                ["cloudflared", "tunnel", "--no-autoupdate",
+                 "--url", f"{scheme}://localhost:{port}", "--no-tls-verify"],
+                "cloudflared",
+                r"(https://[\w-]+\.trycloudflare\.com)")
 
     def _do_start_tunnel_ngrok(self):
         """Start ngrok tunnel."""
@@ -905,10 +1079,11 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                         _tunnel_state["public_url"] = public_url
                         url_found = True
                         _notify_all_listeners()
-                        _msgbox(self.ctx, "MCP Server",
+                        _msgbox_with_copy(self.ctx, "MCP Server",
                                 f"Tunnel active!\n\n"
-                                f"{public_url}/mcp\n\n"
-                                f"Use this URL in ChatGPT Desktop.")
+                                f"ChatGPT:      {public_url}/sse\n"
+                                f"Claude Code:  {public_url}/mcp",
+                                f"{public_url}/sse")
                 except (_json.JSONDecodeError, KeyError):
                     pass
 
@@ -929,11 +1104,43 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             _notify_all_listeners()
             _msgbox(self.ctx, "MCP Server", f"Tunnel error:\n{e}")
 
+    def _do_start_tunnel_tailscale(self):
+        """Start Tailscale Funnel tunnel."""
+        if not self._tunnel_check_binary(
+                "tailscale", ["tailscale", "version"],
+                "https://tailscale.com/download"):
+            return
+        port, scheme = self._tunnel_ensure_server()
+        # Reset any lingering serve/funnel config to avoid
+        # "listener already exists for port 443" errors.
+        for reset_cmd in [["tailscale", "funnel", "reset"],
+                          ["tailscale", "serve", "reset"]]:
+            try:
+                _subprocess.run(
+                    reset_cmd,
+                    capture_output=True, text=True, timeout=5,
+                    creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception as e:
+                logger.debug(f"tailscale reset: {e}")
+        # HTTP  backend → tailscale funnel <port>
+        # HTTPS backend → tailscale funnel https+insecure://127.0.0.1:<port>
+        if scheme == "https":
+            target = f"https+insecure://127.0.0.1:{port}"
+        else:
+            target = str(port)
+        logger.info(f"Starting Tailscale Funnel: {scheme}://localhost:{port}")
+        self._tunnel_run_and_parse(
+            ["tailscale", "funnel", target],
+            "tailscale",
+            r"(https://[\w.-]+\.ts\.net)")
+
     def _do_stop_tunnel(self):
         """Stop tunnel (any provider)."""
         proc = _tunnel_state["process"]
         if proc is None:
             return
+        provider = _config.get("tunnel_provider", "tailscale")
         try:
             proc.terminate()
             try:
@@ -943,6 +1150,19 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                 proc.wait(timeout=3)
         except Exception as e:
             logger.warning(f"Error stopping tunnel: {e}")
+        # Tailscale Funnel persists in daemon — reset it on stop
+        if provider == "tailscale":
+            for reset_cmd in [["tailscale", "funnel", "reset"],
+                              ["tailscale", "serve", "reset"]]:
+                try:
+                    _subprocess.run(
+                        reset_cmd,
+                        capture_output=True, text=True, timeout=5,
+                        creationflags=getattr(_subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                except Exception as e:
+                    logger.debug(f"tailscale reset on stop: {e}")
+            logger.info("Tailscale serve/funnel config reset")
         _tunnel_state["process"] = None
         _tunnel_state["public_url"] = None
         _notify_all_listeners()
@@ -995,10 +1215,23 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             lbl.Label = "\n".join(initial_lines)
             dlg_model.insertByName("StatusText", lbl)
 
+            # "Copy URL" button — visible only when tunnel is active
+            has_tunnel = bool(_tunnel_state.get("public_url"))
+            copy_btn = dlg_model.createInstance(
+                "com.sun.star.awt.UnoControlButtonModel")
+            copy_btn.Name = "CopyBtn"
+            copy_btn.PositionX = 10
+            copy_btn.PositionY = 88
+            copy_btn.Width = 65
+            copy_btn.Height = 14
+            copy_btn.Label = "Copy MCP URL"
+            copy_btn.Enabled = has_tunnel
+            dlg_model.insertByName("CopyBtn", copy_btn)
+
             btn = dlg_model.createInstance(
                 "com.sun.star.awt.UnoControlButtonModel")
             btn.Name = "OKBtn"
-            btn.PositionX = 90
+            btn.PositionX = 170
             btn.PositionY = 88
             btn.Width = 50
             btn.Height = 14
@@ -1012,6 +1245,61 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
             toolkit = smgr.createInstanceWithContext(
                 "com.sun.star.awt.Toolkit", ctx)
             dlg.createPeer(toolkit, None)
+
+            # Wire up Copy button click
+            class CopyListener(unohelper.Base,
+                               __import__('com.sun.star.awt',
+                                          fromlist=['XActionListener'])
+                               .XActionListener):
+                def __init__(self, dialog, context):
+                    self._dlg = dialog
+                    self._ctx = context
+
+                def actionPerformed(self, ev):
+                    pub = _tunnel_state.get("public_url", "")
+                    if not pub:
+                        return
+                    if pub.startswith("http"):
+                        mcp_url = f"{pub}/sse"
+                    else:
+                        s = "https" if _config.get("enable_ssl", True) else "http"
+                        mcp_url = f"{s}://{pub}/sse"
+                    # Copy to system clipboard via LO
+                    try:
+                        clip = self._ctx.ServiceManager.createInstanceWithContext(
+                            "com.sun.star.datatransfer.clipboard.SystemClipboard",
+                            self._ctx)
+                        from com.sun.star.datatransfer import DataFlavor
+                        class TextTransferable(unohelper.Base,
+                                               __import__('com.sun.star.datatransfer',
+                                                          fromlist=['XTransferable'])
+                                               .XTransferable):
+                            def __init__(self, text):
+                                self._text = text
+                            def getTransferData(self, flavor):
+                                return self._text
+                            def getTransferDataFlavors(self):
+                                f = DataFlavor()
+                                f.MimeType = "text/plain;charset=utf-16"
+                                f.HumanPresentableName = "Unicode Text"
+                                f.DataType = uno.getTypeByName("string")
+                                return (f,)
+                            def isDataFlavorSupported(self, flavor):
+                                return "text/plain" in flavor.MimeType
+                        clip.setContents(TextTransferable(mcp_url), None)
+                        # Update button text briefly
+                        try:
+                            self._dlg.getModel().getByName("CopyBtn").Label = "Copied!"
+                        except Exception:
+                            pass
+                    except Exception as ex:
+                        logger.error(f"Clipboard copy failed: {ex}")
+
+                def disposing(self, ev):
+                    pass
+
+            dlg.getControl("CopyBtn").addActionListener(
+                CopyListener(dlg, ctx))
 
             # Background probe updates the label while dialog is open
             def probe_and_update():
@@ -1041,6 +1329,15 @@ class MCPExtension(unohelper.Base, XDispatch, XDispatchProvider,
                         lines.append(f"Tunnel: {_tunnel_state['public_url']}")
                     try:
                         dlg_model.getByName("StatusText").Label = "\n".join(lines)
+                        # Enable/disable Copy button based on tunnel state
+                        copy_m = dlg_model.getByName("CopyBtn")
+                        if _tunnel_state.get("public_url"):
+                            copy_m.Enabled = True
+                            if copy_m.Label == "Copy MCP URL":
+                                pass  # keep label
+                        else:
+                            copy_m.Enabled = False
+                            copy_m.Label = "Copy MCP URL"
                     except Exception:
                         pass  # dialog already closed
                 except Exception as e:
@@ -1117,6 +1414,15 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
         return ("external_event",)
 
     # -- Load / Save ----------------------------------------------------------
+    # Two pages share this handler: "Server" (MCPSettings.xdl) and
+    # "Tunnel" (MCPTunnel.xdl). We detect which page by checking for
+    # a control unique to each.
+
+    def _is_tunnel_page(self, xWindow):
+        try:
+            return xWindow.getControl("TunnelCheck") is not None
+        except Exception:
+            return False
 
     def _load_to_dialog(self, xWindow):
         try:
@@ -1125,82 +1431,158 @@ class MCPOptionsHandler(unohelper.Base, XContainerWindowEventHandler,
                 cfg = dict(_DEFAULT_CONFIG)
             logger.debug(f"Options: loading {cfg}")
 
-            xWindow.getControl("AutoStartCheck").setState(
-                1 if cfg["autostart"] else 0)
-            xWindow.getControl("HostField").setText(cfg["host"])
-            xWindow.getControl("PortField").setValue(float(cfg["port"]))
-            xWindow.getControl("SSLCheck").setState(
-                1 if cfg.get("enable_ssl", True) else 0)
-            xWindow.getControl("TunnelCheck").setState(
-                1 if cfg.get("enable_tunnel", False) else 0)
-            # Populate provider dropdown
-            _providers = ["cloudflared", "bore", "ngrok"]
-            provider_list = xWindow.getControl("TunnelProviderList")
-            provider_list.removeItems(0, provider_list.getItemCount())
-            for p in _providers:
-                provider_list.addItem(p, provider_list.getItemCount())
-            provider = cfg.get("tunnel_provider", "cloudflared")
-            try:
-                provider_list.selectItemPos(_providers.index(provider), True)
-            except ValueError:
-                provider_list.selectItemPos(0, True)
-            xWindow.getControl("TunnelServerField").setText(
-                cfg.get("tunnel_server", "bore.pub"))
-            xWindow.getControl("NgrokTokenField").setText(
-                cfg.get("ngrok_authtoken", ""))
-            scheme = "https" if cfg.get("enable_ssl", True) else "http"
-            xWindow.getControl("UrlText").setText(
-                f"Health check: {scheme}://{cfg['host']}:{cfg['port']}/health")
+            if self._is_tunnel_page(xWindow):
+                self._load_tunnel_page(xWindow, cfg)
+            else:
+                self._load_server_page(xWindow, cfg)
         except Exception as e:
             logger.error(f"Options load error: {e}")
             logger.error(traceback.format_exc())
 
+    def _load_server_page(self, xWindow, cfg):
+        xWindow.getControl("AutoStartCheck").setState(
+            1 if cfg["autostart"] else 0)
+        xWindow.getControl("HostField").setText(cfg["host"])
+        xWindow.getControl("PortField").setValue(float(cfg["port"]))
+        xWindow.getControl("SSLCheck").setState(
+            1 if cfg.get("enable_ssl", True) else 0)
+        scheme = "https" if cfg.get("enable_ssl", True) else "http"
+        xWindow.getControl("UrlText").setText(
+            f"Health check: {scheme}://{cfg['host']}:{cfg['port']}/health")
+
+    _TUNNEL_PROVIDERS = ["tailscale", "cloudflared", "bore", "ngrok"]
+
+    # Provider-specific field groups for visibility toggling
+    _PROVIDER_FIELDS = {
+        "cloudflared": ["CfTunnelNameLabel", "CfTunnelNameField",
+                        "CfPublicUrlLabel", "CfPublicUrlField"],
+        "bore": ["TunnelServerLabel", "TunnelServerField"],
+        "ngrok": ["NgrokTokenLabel", "NgrokTokenField"],
+        "tailscale": [],
+    }
+
+    def _show_provider_fields(self, xWindow, provider):
+        """Show only the fields relevant to the selected provider."""
+        all_fields = set()
+        for fields in self._PROVIDER_FIELDS.values():
+            all_fields.update(fields)
+        active_fields = set(self._PROVIDER_FIELDS.get(provider, []))
+        for name in all_fields:
+            try:
+                ctrl = xWindow.getControl(name)
+                ctrl.setVisible(name in active_fields)
+            except Exception:
+                pass
+
+    def _load_tunnel_page(self, xWindow, cfg):
+        xWindow.getControl("TunnelCheck").setState(
+            1 if cfg.get("enable_tunnel", False) else 0)
+        # Populate provider dropdown
+        provider_list = xWindow.getControl("TunnelProviderList")
+        provider_list.removeItems(0, provider_list.getItemCount())
+        for p in self._TUNNEL_PROVIDERS:
+            provider_list.addItem(p, provider_list.getItemCount())
+        provider = cfg.get("tunnel_provider", "cloudflared")
+        try:
+            provider_list.selectItemPos(
+                self._TUNNEL_PROVIDERS.index(provider), True)
+        except ValueError:
+            provider_list.selectItemPos(0, True)
+        # Provider-specific fields
+        xWindow.getControl("TunnelServerField").setText(
+            cfg.get("tunnel_server", "bore.pub"))
+        xWindow.getControl("CfTunnelNameField").setText(
+            cfg.get("cf_tunnel_name", ""))
+        xWindow.getControl("CfPublicUrlField").setText(
+            cfg.get("cf_public_url", ""))
+        xWindow.getControl("NgrokTokenField").setText(
+            cfg.get("ngrok_authtoken", ""))
+        # Show/hide fields for selected provider
+        self._show_provider_fields(xWindow, provider)
+        # Attach listener to toggle fields on provider change
+        try:
+            XItemListener = __import__(
+                'com.sun.star.awt', fromlist=['XItemListener']).XItemListener
+
+            handler = self
+
+            class ProviderChangeListener(unohelper.Base, XItemListener):
+                def __init__(self, window):
+                    self._win = window
+
+                def itemStateChanged(self, ev):
+                    sel = ev.Selected
+                    providers = handler._TUNNEL_PROVIDERS
+                    if 0 <= sel < len(providers):
+                        handler._show_provider_fields(
+                            self._win, providers[sel])
+
+                def disposing(self, ev):
+                    pass
+
+            provider_list.addItemListener(ProviderChangeListener(xWindow))
+        except Exception as e:
+            logger.warning(f"Could not attach provider listener: {e}")
+
     def _save_from_dialog(self, xWindow):
         try:
-            new_values = {
-                "autostart": xWindow.getControl("AutoStartCheck").getState() == 1,
-                "port": int(xWindow.getControl("PortField").getValue()),
-                "host": xWindow.getControl("HostField").getText(),
-                "enable_ssl": xWindow.getControl("SSLCheck").getState() == 1,
-                "enable_tunnel": xWindow.getControl("TunnelCheck").getState() == 1,
-                "tunnel_provider": (lambda pl: (
-                    ["cloudflared", "bore", "ngrok"][pl.getSelectedItemPos()]
-                    if 0 <= pl.getSelectedItemPos() < 3
-                    else "cloudflared"
-                ))(xWindow.getControl("TunnelProviderList")),
-                "tunnel_server": xWindow.getControl("TunnelServerField").getText(),
-                "ngrok_authtoken": xWindow.getControl("NgrokTokenField").getText(),
-            }
-            logger.info(f"Options: saving {new_values}")
-
-            # Detect if server needs restart (port, host, or SSL changed)
-            old_port = _config.get("port", 8765)
-            old_host = _config.get("host", "localhost")
-            old_ssl = _config.get("enable_ssl", True)
-            needs_restart = (
-                _mcp_state["started"]
-                and (new_values["port"] != old_port
-                     or new_values["host"] != old_host
-                     or new_values["enable_ssl"] != old_ssl)
-            )
-
-            _write_lo_config(new_values)
-            _config.update(new_values)
-
-            if needs_restart:
-                logger.info(f"Options: port/host changed "
-                            f"({old_host}:{old_port} -> "
-                            f"{new_values['host']}:{new_values['port']}), "
-                            f"restarting server...")
-                _stop_mcp_server()
-                _kill_zombies_on_port(old_host, old_port)
-                threading.Thread(
-                    target=self._restart_after_config_change,
-                    daemon=True).start()
-
+            if self._is_tunnel_page(xWindow):
+                self._save_tunnel_page(xWindow)
+            else:
+                self._save_server_page(xWindow)
         except Exception as e:
             logger.error(f"Options save error: {e}")
             logger.error(traceback.format_exc())
+
+    def _save_server_page(self, xWindow):
+        new_values = {
+            "autostart": xWindow.getControl("AutoStartCheck").getState() == 1,
+            "port": int(xWindow.getControl("PortField").getValue()),
+            "host": xWindow.getControl("HostField").getText(),
+            "enable_ssl": xWindow.getControl("SSLCheck").getState() == 1,
+        }
+        logger.info(f"Options (server): saving {new_values}")
+
+        # Detect if server needs restart (port, host, or SSL changed)
+        old_port = _config.get("port", 8765)
+        old_host = _config.get("host", "localhost")
+        old_ssl = _config.get("enable_ssl", True)
+        needs_restart = (
+            _mcp_state["started"]
+            and (new_values["port"] != old_port
+                 or new_values["host"] != old_host
+                 or new_values["enable_ssl"] != old_ssl)
+        )
+
+        _write_lo_config(new_values)
+        _config.update(new_values)
+
+        if needs_restart:
+            logger.info(f"Options: port/host changed "
+                        f"({old_host}:{old_port} -> "
+                        f"{new_values['host']}:{new_values['port']}), "
+                        f"restarting server...")
+            _stop_mcp_server()
+            _kill_zombies_on_port(old_host, old_port)
+            threading.Thread(
+                target=self._restart_after_config_change,
+                daemon=True).start()
+
+    def _save_tunnel_page(self, xWindow):
+        provider_list = xWindow.getControl("TunnelProviderList")
+        sel = provider_list.getSelectedItemPos()
+        providers = self._TUNNEL_PROVIDERS
+        new_values = {
+            "enable_tunnel": xWindow.getControl("TunnelCheck").getState() == 1,
+            "tunnel_provider": providers[sel] if 0 <= sel < len(providers) else "tailscale",
+            "tunnel_server": xWindow.getControl("TunnelServerField").getText(),
+            "cf_tunnel_name": xWindow.getControl("CfTunnelNameField").getText(),
+            "cf_public_url": xWindow.getControl("CfPublicUrlField").getText(),
+            "ngrok_authtoken": xWindow.getControl("NgrokTokenField").getText(),
+        }
+        logger.info(f"Options (tunnel): saving {new_values}")
+        _write_lo_config(new_values)
+        _config.update(new_values)
 
     def _restart_after_config_change(self):
         """Restart server on new port after config change."""

@@ -19,6 +19,7 @@ class WriterService:
         paragraphs  — paragraph CRUD, reading, editing
         search      — search & replace
         structural  — sections, pages, indexes, locator resolution
+        proximity   — local heading navigation, surroundings discovery
     """
 
     def __init__(self, registry):
@@ -29,13 +30,15 @@ class WriterService:
         from .paragraphs import ParagraphService
         from .search import SearchService
         from .structural import StructuralService
+        from .proximity import ProximityService
 
         self.tree = TreeService(self)
         self.paragraphs = ParagraphService(self)
         self.search = SearchService(self)
         self.structural = StructuralService(self)
+        self.proximity = ProximityService(self)
 
-        logger.info("WriterService ready (4 sub-services)")
+        logger.info("WriterService ready (5 sub-services)")
 
     # ==================================================================
     # Shared helpers (used across sub-services)
@@ -99,6 +102,7 @@ class WriterService:
     def invalidate_caches(self, doc=None):
         """Invalidate all per-document caches after an edit."""
         self.tree.invalidate_cache(doc)
+        self.proximity.invalidate_cache(doc)
         self._base.invalidate_page_cache()
 
     # ==================================================================
@@ -137,6 +141,9 @@ class WriterService:
 
     def duplicate_paragraph(self, *a, **kw):
         return self.paragraphs.duplicate_paragraph(*a, **kw)
+
+    def clone_heading_block(self, *a, **kw):
+        return self.paragraphs.clone_heading_block(*a, **kw)
 
     # -- Search --
     def search_document(self, *a, **kw):
@@ -185,6 +192,13 @@ class WriterService:
 
     def update_fields(self, *a, **kw):
         return self.structural.update_fields(*a, **kw)
+
+    # -- Proximity --
+    def navigate_heading(self, *a, **kw):
+        return self.proximity.navigate_heading(*a, **kw)
+
+    def get_surroundings(self, *a, **kw):
+        return self.proximity.get_surroundings(*a, **kw)
 
     # -- Document ops (delegated to BaseService) --
     def get_document_properties(self, *a, **kw):

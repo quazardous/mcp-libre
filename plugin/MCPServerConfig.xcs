@@ -54,7 +54,7 @@
       <group oor:name="Tunnel">
         <info>
           <desc>Expose the MCP server publicly via a TCP/HTTP tunnel.
-Supported providers: cloudflared, bore, ngrok.</desc>
+Supported providers: tailscale, cloudflared, bore, ngrok.</desc>
         </info>
         <prop oor:name="Enabled" oor:type="xs:boolean" oor:nillable="false">
           <info>
@@ -64,9 +64,9 @@ Supported providers: cloudflared, bore, ngrok.</desc>
         </prop>
         <prop oor:name="Provider" oor:type="xs:string" oor:nillable="false">
           <info>
-            <desc>Active tunnel provider: cloudflared, bore, or ngrok.</desc>
+            <desc>Active tunnel provider: tailscale, cloudflared, bore, or ngrok.</desc>
           </info>
-          <value>cloudflared</value>
+          <value>tailscale</value>
         </prop>
 
         <!-- bore — lightweight TCP tunnel, no account needed.
@@ -87,13 +87,30 @@ Install from https://github.com/ekzhang/bore/releases</desc>
 
         <!-- cloudflared — Cloudflare quick tunnel, no account needed.
              Install: winget install Cloudflare.cloudflared (or brew install cloudflared)
-             Gives a trusted HTTPS URL (*.trycloudflare.com). -->
+             Gives a trusted HTTPS URL (*.trycloudflare.com).
+             Named tunnels: stable URL with a Cloudflare account + domain. -->
         <group oor:name="Cloudflared">
           <info>
             <desc>cloudflared (Cloudflare Tunnel) settings. No account needed for quick tunnels.
 Install: winget install Cloudflare.cloudflared
-Gives a public HTTPS URL like https://xxx.trycloudflare.com</desc>
+Quick tunnel: random HTTPS URL (*.trycloudflare.com).
+Named tunnel: stable URL via Cloudflare account + domain.</desc>
           </info>
+          <prop oor:name="TunnelName" oor:type="xs:string" oor:nillable="false">
+            <info>
+              <desc>Named tunnel identifier (leave empty for a quick tunnel with random URL).
+Create with: cloudflared tunnel create my-tunnel
+Route with: cloudflared tunnel route dns my-tunnel mcp.example.com</desc>
+            </info>
+            <value></value>
+          </prop>
+          <prop oor:name="PublicUrl" oor:type="xs:string" oor:nillable="false">
+            <info>
+              <desc>Public URL for named tunnel (e.g. https://mcp.example.com).
+Only used with named tunnels — quick tunnels auto-detect the URL.</desc>
+            </info>
+            <value></value>
+          </prop>
         </group>
 
         <!-- ngrok — requires a free account + authtoken.
@@ -113,6 +130,18 @@ Free tier limits: 20k requests/month, 1 GB bandwidth.</desc>
             </info>
             <value></value>
           </prop>
+        </group>
+
+        <!-- tailscale — Tailscale Funnel, requires Tailscale account.
+             Install: https://tailscale.com/download
+             Enable funnel in admin console, then: tailscale funnel <port>
+             Gives a stable HTTPS URL: https://machine.tailnet.ts.net -->
+        <group oor:name="Tailscale">
+          <info>
+            <desc>Tailscale Funnel settings. Requires Tailscale account + Funnel enabled.
+Install: https://tailscale.com/download
+Stable HTTPS URL based on your machine name.</desc>
+          </info>
         </group>
       </group>
     </group>

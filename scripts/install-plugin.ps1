@@ -14,6 +14,7 @@
     .\install-plugin.ps1 -BuildOnly        # Only create the .oxt
     .\install-plugin.ps1 -Uninstall        # Remove the extension
     .\install-plugin.ps1 -Uninstall -Force # Remove without prompts
+    .\install-plugin.ps1 -Cache            # Hot-deploy to LO cache (dev iteration)
 #>
 
 [CmdletBinding()]
@@ -21,7 +22,8 @@ param(
     [switch]$BuildOnly,
     [switch]$Uninstall,
     [switch]$NoRestart,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Cache
 )
 
 Set-StrictMode -Version Latest
@@ -353,6 +355,7 @@ function Build-Oxt {
         "MCPServerConfig.xcu",
         "OptionsDialog.xcu",
         "dialogs\MCPSettings.xdl",
+        "dialogs\MCPTunnel.xdl",
         "icons\stopped_16.png",
         "icons\running_16.png",
         "icons\starting_16.png"
@@ -435,6 +438,7 @@ function Build-Oxt {
     $stageDialogs = Join-Path $StagingDir "dialogs"
     New-Item -ItemType Directory -Path $stageDialogs -Force | Out-Null
     Copy-Item (Join-Path $PluginDir "dialogs\MCPSettings.xdl") $stageDialogs
+    Copy-Item (Join-Path $PluginDir "dialogs\MCPTunnel.xdl") $stageDialogs
 
     # Icons (dynamic menu state icons)
     $stageIcons = Join-Path $StagingDir "icons"
@@ -607,6 +611,163 @@ function Start-LibreOfficeApp {
     Write-Info "  curl -k https://localhost:8765/health"
 }
 
+# ── Cache install (hot-deploy for dev iteration) ─────────────────────────────
+
+function Install-ToCache {
+    <#
+    .SYNOPSIS
+        Copy source files directly into the LO extension cache, converting
+        relative imports and stripping BOM. Much faster than unopkg for
+        development iteration — just restart LO afterwards.
+
+        Requires that the extension was already installed via unopkg at least
+        once (so the cache directory structure exists).
+    #>
+
+    Write-Host ""
+    Write-Host "=== Cache Install (hot-deploy) ===" -ForegroundColor Cyan
+    Write-Host ""
+
+    # ── Find the cached extension directory ──────────────────────────────
+    $cacheDir = Get-UnopkgCacheDir
+    if (-not $cacheDir) {
+        Write-Err "Could not find uno_packages cache directory"
+        exit 1
+    }
+
+    $packagesDir = Join-Path $cacheDir "cache\uno_packages"
+    if (-not (Test-Path $packagesDir)) {
+        Write-Err "Cache packages dir not found: $packagesDir"
+        Write-Info "Run a normal install first: .\install-plugin.ps1 -Force"
+        exit 1
+    }
+
+    # Find the *.tmp_ directory containing our extension
+    $extDir = $null
+    Get-ChildItem $packagesDir -Directory -Filter "*.tmp_" -ErrorAction SilentlyContinue | ForEach-Object {
+        $oxtDir = Join-Path $_.FullName "libreoffice-mcp-extension.oxt"
+        if (Test-Path $oxtDir) {
+            $extDir = $oxtDir
+        }
+    }
+    if (-not $extDir) {
+        Write-Err "Extension not found in cache. Run a normal install first."
+        exit 1
+    }
+    Write-OK "Cache dir: $extDir"
+
+    # ── Copy and fix files ───────────────────────────────────────────────
+
+    # Track what we deploy
+    $deployed = @()
+
+    # --- pythonpath/ tree (root-level .py: fix imports; sub-packages: BOM only) ---
+    $srcPy  = Join-Path $PluginDir "pythonpath"
+    $dstPy  = Join-Path $extDir    "pythonpath"
+
+    if (-not (Test-Path $dstPy)) {
+        New-Item -ItemType Directory -Path $dstPy -Force | Out-Null
+    }
+
+    # Root-level .py files: fix relative imports + strip BOM
+    Get-ChildItem $srcPy -Filter "*.py" -File | ForEach-Object {
+        $content = Get-Content $_.FullName -Raw -Encoding UTF8
+        if (-not $content) { return }
+        $content = $content -replace '^\xEF\xBB\xBF', ''
+        $content = $content.TrimStart([char]0xFEFF)
+        # from .module import X  -->  from module import X
+        $content = $content -replace 'from \.([\w]+) import', 'from $1 import'
+        # import .module  -->  import module
+        $content = $content -replace 'import \.([\w]+)', 'import $1'
+
+        $dst = Join-Path $dstPy $_.Name
+        Write-Utf8NoBom $dst $content
+        $deployed += "pythonpath/$($_.Name)"
+    }
+
+    # Sub-package .py files: strip BOM only, keep relative imports
+    Get-ChildItem $srcPy -Filter "*.py" -Recurse -File |
+        Where-Object { $_.DirectoryName -ne (Resolve-Path $srcPy).Path } |
+        ForEach-Object {
+            $relPath = $_.FullName.Substring((Resolve-Path $srcPy).Path.Length + 1)
+            $dst = Join-Path $dstPy $relPath
+            $dstDir = Split-Path $dst
+            if (-not (Test-Path $dstDir)) {
+                New-Item -ItemType Directory -Path $dstDir -Force | Out-Null
+            }
+            $content = Get-Content $_.FullName -Raw -Encoding UTF8
+            if (-not $content) { return }
+            $content = $content -replace '^\xEF\xBB\xBF', ''
+            $content = $content.TrimStart([char]0xFEFF)
+            Write-Utf8NoBom $dst $content
+            $deployed += "pythonpath/$relPath"
+        }
+
+    # --- registration.py → extension root (UNO entry point) ---
+    $regSrc = Join-Path $PluginDir "pythonpath\registration.py"
+    $regDst = Join-Path $extDir "registration.py"
+    $content = Get-Content $regSrc -Raw -Encoding UTF8
+    $content = $content -replace '^\xEF\xBB\xBF', ''
+    $content = $content.TrimStart([char]0xFEFF)
+    $content = $content -replace 'from \.([\w]+) import', 'from $1 import'
+    $content = $content -replace 'import \.([\w]+)', 'import $1'
+    Write-Utf8NoBom $regDst $content
+    $deployed += "registration.py"
+
+    # --- Config / XCU / XCS files ---
+    $configFiles = @(
+        "MCPServerConfig.xcs",
+        "MCPServerConfig.xcu",
+        "Addons.xcu",
+        "ProtocolHandler.xcu",
+        "OptionsDialog.xcu",
+        "Jobs.xcu",
+        "description.xml"
+    )
+    foreach ($f in $configFiles) {
+        $src = Join-Path $PluginDir $f
+        if (Test-Path $src) {
+            Copy-Item $src (Join-Path $extDir $f) -Force
+            $deployed += $f
+        }
+    }
+
+    # --- Dialogs ---
+    $dstDialogs = Join-Path $extDir "dialogs"
+    if (-not (Test-Path $dstDialogs)) {
+        New-Item -ItemType Directory -Path $dstDialogs -Force | Out-Null
+    }
+    Get-ChildItem (Join-Path $PluginDir "dialogs") -Filter "*.xdl" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $dstDialogs $_.Name) -Force
+        $deployed += "dialogs/$($_.Name)"
+    }
+
+    # --- Icons ---
+    $dstIcons = Join-Path $extDir "icons"
+    if (-not (Test-Path $dstIcons)) {
+        New-Item -ItemType Directory -Path $dstIcons -Force | Out-Null
+    }
+    Get-ChildItem (Join-Path $PluginDir "icons") -Filter "*.png" -ErrorAction SilentlyContinue | ForEach-Object {
+        Copy-Item $_.FullName (Join-Path $dstIcons $_.Name) -Force
+        $deployed += "icons/$($_.Name)"
+    }
+
+    # --- AGENT.md ---
+    $agentMd = Join-Path $ProjectRoot "AGENT.md"
+    if (Test-Path $agentMd) {
+        Copy-Item $agentMd (Join-Path $extDir "AGENT.md") -Force
+        $deployed += "AGENT.md"
+    }
+
+    # ── Report ───────────────────────────────────────────────────────────
+    Write-Host ""
+    Write-OK "Deployed $($deployed.Count) files to cache"
+    $deployed | ForEach-Object { Write-Info "  $_" }
+    Write-Host ""
+    Write-Info "Restart LibreOffice to pick up changes."
+    Write-Host ""
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 function Main {
@@ -623,6 +784,12 @@ function Main {
         exit 1
     }
     Write-OK "LibreOffice: $loDir"
+
+    # Cache mode (hot-deploy without unopkg)
+    if ($Cache) {
+        Install-ToCache
+        return
+    }
 
     # Find unopkg
     $unopkg = Find-Unopkg $loDir

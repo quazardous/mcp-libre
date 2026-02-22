@@ -479,3 +479,42 @@ class ParagraphService:
                     "duplicated_count": count}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def clone_heading_block(self, locator: str = None,
+                            paragraph_index: int = None,
+                            file_path: str = None) -> Dict[str, Any]:
+        """Clone a heading and all its content (sub-headings + body)."""
+        try:
+            doc = self._base.resolve_document(file_path)
+            if locator is not None and paragraph_index is None:
+                resolved = self._base.resolve_locator(doc, locator)
+                paragraph_index = resolved.get("para_index")
+            if paragraph_index is None:
+                return {"success": False,
+                        "error": "Provide locator or paragraph_index"}
+
+            # Find the heading node in the tree to get its total size
+            tree = self._writer._tree_service._get_heading_tree(doc)
+            node = self._writer._tree_service._find_node_by_para_index(
+                tree, paragraph_index)
+            if node is None:
+                return {"success": False,
+                        "error": f"No heading at paragraph {paragraph_index}"}
+
+            # Total paragraphs = heading itself (1) + body + all children
+            total = 1 + self._writer._tree_service._count_all_children(node)
+
+            # Use existing duplicate_paragraph with the full range
+            result = self.duplicate_paragraph(
+                paragraph_index=paragraph_index, count=total,
+                file_path=file_path)
+
+            if result.get("success"):
+                result["heading_text"] = node.get("text", "")
+                result["block_size"] = total
+                result["message"] = (
+                    f"Cloned heading block '{node.get('text', '')}' "
+                    f"({total} paragraphs)")
+            return result
+        except Exception as e:
+            return {"success": False, "error": str(e)}

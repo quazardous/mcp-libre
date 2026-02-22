@@ -114,7 +114,8 @@ class SetDocumentImageProperties(McpTool):
 class InsertDocumentImage(McpTool):
     name = "insert_image"
     description = (
-        "Insert an image from a file path into the document. "
+        "Insert an image from a file path or URL into the document. "
+        "Supports http/https URLs (image is downloaded automatically). "
         "By default the image is wrapped in a text frame (caption frame). "
         "Set with_frame=False to insert a standalone image."
     )
@@ -123,7 +124,7 @@ class InsertDocumentImage(McpTool):
         "properties": {
             "image_path": {
                 "type": "string",
-                "description": "Absolute path to the image file on disk",
+                "description": "Absolute path to the image file on disk, or an HTTP/HTTPS URL",
             },
             "locator": {
                 "type": "string",
@@ -202,7 +203,8 @@ class ReplaceDocumentImage(McpTool):
     description = (
         "Replace an image's source file, keeping its frame and position. "
         "The image stays in its current frame with the same anchor, "
-        "orientation, and caption. Only the graphic source changes."
+        "orientation, and caption. Only the graphic source changes. "
+        "Supports http/https URLs (image is downloaded automatically)."
     )
     parameters = {
         "type": "object",
@@ -213,7 +215,7 @@ class ReplaceDocumentImage(McpTool):
             },
             "new_image_path": {
                 "type": "string",
-                "description": "Absolute path to the new image file on disk",
+                "description": "Absolute path to the new image file on disk, or an HTTP/HTTPS URL",
             },
             "width_mm": {
                 "type": "integer",
