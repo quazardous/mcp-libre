@@ -111,13 +111,48 @@ class SetDocumentImageProperties(McpTool):
             file_path)
 
 
+class DownloadImage(McpTool):
+    name = "download_image"
+    description = (
+        "Download an image from a URL to local cache. "
+        "Returns the local file path for use with insert_image or "
+        "replace_image. Cached: same URL returns instantly on repeat calls. "
+        "Use force=true to re-download. Retries up to 3 times on failure. "
+        "SSL verification disabled by default for academic/intranet sites."
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "HTTP/HTTPS URL of the image to download",
+            },
+            "verify_ssl": {
+                "type": "boolean",
+                "description": "Verify SSL certificates (default: false — "
+                               "accepts self-signed certs)",
+            },
+            "force": {
+                "type": "boolean",
+                "description": "Force re-download even if cached "
+                               "(default: false)",
+            },
+        },
+        "required": ["url"],
+    }
+
+    def execute(self, url, verify_ssl=False, force=False, **_):
+        return self.services.images.download_image(url, verify_ssl, force)
+
+
 class InsertDocumentImage(McpTool):
     name = "insert_image"
     description = (
-        "Insert an image from a file path or URL into the document. "
-        "Supports http/https URLs (image is downloaded automatically). "
-        "By default the image is wrapped in a text frame (caption frame). "
-        "Set with_frame=False to insert a standalone image."
+        "Insert an image from a local file path or URL into the document. "
+        "Supports http/https URLs (auto-downloaded with cache and retry). "
+        "Tip: use download_image first to pre-cache, then pass the local "
+        "path here. By default the image is wrapped in a text frame "
+        "(caption frame). Set with_frame=False for standalone image."
     )
     parameters = {
         "type": "object",

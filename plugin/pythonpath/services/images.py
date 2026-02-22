@@ -2,10 +2,12 @@
 ImageService — images, graphic objects, and text frames.
 """
 
+import hashlib
 import logging
 import os
 import ssl
 import tempfile
+import time
 import urllib.request
 import urllib.error
 from typing import Any, Dict
@@ -13,46 +15,10 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-
-def _maybe_download(path_or_url: str, verify_ssl: bool = False) -> str:
-    """If path_or_url is an HTTP(S) URL, download to a temp file and return
-    the local path.  Otherwise return the original path unchanged."""
-    parsed = urlparse(path_or_url)
-    if parsed.scheme not in ("http", "https"):
-        return path_or_url
-
-    # Guess extension from URL path
-    ext = os.path.splitext(parsed.path)[1] or ".png"
-    if ext not in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp",
-                   ".tiff", ".tif", ".ico"):
-        ext = ".png"
-
-    fd, tmp_path = tempfile.mkstemp(suffix=ext, prefix="mcp_img_")
-    os.close(fd)
-    try:
-        req = urllib.request.Request(path_or_url, headers={
-            "User-Agent": "LibreOffice-MCP/1.0"})
-        if verify_ssl:
-            ctx = None
-        else:
-            # Skip SSL verification — images may come from tunnels or
-            # internal servers with self-signed certs.
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-        with urllib.request.urlopen(req, timeout=30,
-                                    context=ctx) as resp:
-            with open(tmp_path, "wb") as f:
-                f.write(resp.read())
-        logger.info("Downloaded image %s -> %s", path_or_url, tmp_path)
-        return tmp_path
-    except Exception as e:
-        # Clean up on failure
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise ValueError(f"Failed to download image from {path_or_url}: {e}")
+_VALID_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp",
+               ".tiff", ".tif", ".ico")
+_MAX_RETRIES = 3
+_RETRY_DELAY = 1.0
 
 
 class ImageService:
@@ -61,6 +27,118 @@ class ImageService:
     def __init__(self, registry):
         self._registry = registry
         self._base = registry.base
+        self._url_cache: Dict[str, str] = {}  # url -> local_path
+
+    # ==================================================================
+    # Image download (cache + retry + dedup)
+    # ==================================================================
+
+    def _resolve_image(self, path_or_url: str,
+                       verify_ssl: bool = False,
+                       force: bool = False) -> str:
+        """Resolve a path or URL to a local file path.
+
+        If it's already a local path, return as-is.
+        If it's a URL, check cache first, then download with retry.
+        """
+        parsed = urlparse(path_or_url)
+        if parsed.scheme not in ("http", "https"):
+            return path_or_url
+
+        # Check cache (URL -> local file still exists)
+        if not force and path_or_url in self._url_cache:
+            cached = self._url_cache[path_or_url]
+            if os.path.isfile(cached):
+                logger.info("Cache hit: %s -> %s", path_or_url, cached)
+                return cached
+            else:
+                del self._url_cache[path_or_url]
+
+        # Download with retry
+        local_path = self._download_with_retry(path_or_url, verify_ssl)
+        self._url_cache[path_or_url] = local_path
+        return local_path
+
+    def _download_with_retry(self, url: str,
+                             verify_ssl: bool = False) -> str:
+        """Download URL to temp file with retry logic."""
+        parsed = urlparse(url)
+        ext = os.path.splitext(parsed.path)[1] or ".png"
+        if ext.split("?")[0] not in _VALID_EXTS:
+            ext = ".png"
+        ext = ext.split("?")[0]
+
+        # Use URL hash for stable temp filename (dedup across calls)
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+        tmp_dir = tempfile.gettempdir()
+        tmp_path = os.path.join(tmp_dir, f"mcp_img_{url_hash}{ext}")
+
+        if verify_ssl:
+            ctx = None
+        else:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+
+        last_error = None
+        for attempt in range(1, _MAX_RETRIES + 1):
+            try:
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "LibreOffice-MCP/1.0"})
+                with urllib.request.urlopen(req, timeout=30,
+                                            context=ctx) as resp:
+                    data = resp.read()
+                    with open(tmp_path, "wb") as f:
+                        f.write(data)
+                size_kb = len(data) / 1024
+                logger.info("Downloaded %s -> %s (%.1f KB, attempt %d)",
+                            url, tmp_path, size_kb, attempt)
+                return tmp_path
+            except Exception as e:
+                last_error = e
+                logger.warning("Download attempt %d/%d failed for %s: %s",
+                               attempt, _MAX_RETRIES, url, e)
+                if attempt < _MAX_RETRIES:
+                    time.sleep(_RETRY_DELAY * attempt)
+
+        # All retries exhausted
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise ValueError(
+            f"Failed to download {url} after {_MAX_RETRIES} attempts: "
+            f"{last_error}")
+
+    def download_image(self, url: str, verify_ssl: bool = False,
+                       force: bool = False) -> Dict[str, Any]:
+        """Download an image URL to local cache. Returns local path.
+
+        Cached: subsequent calls with the same URL return instantly.
+        Use force=True to re-download even if cached.
+        """
+        try:
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                return {"success": False,
+                        "error": f"Not a URL: {url}"}
+
+            was_cached = (not force and url in self._url_cache
+                          and os.path.isfile(
+                              self._url_cache.get(url, "")))
+            local_path = self._resolve_image(url, verify_ssl, force)
+            size_bytes = os.path.getsize(local_path)
+
+            return {
+                "success": True,
+                "url": url,
+                "local_path": local_path,
+                "size_bytes": size_bytes,
+                "cached": was_cached,
+                "cache_size": len(self._url_cache),
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     # ==================================================================
     # Images
@@ -345,10 +423,9 @@ class ImageService:
                      verify_ssl: bool = False,
                      file_path: str = None) -> Dict[str, Any]:
         """Insert an image from a file path or URL at a paragraph position."""
-        is_url = image_path.startswith(("http://", "https://"))
         try:
             try:
-                image_path = _maybe_download(image_path, verify_ssl)
+                image_path = self._resolve_image(image_path, verify_ssl)
             except ValueError as e:
                 return {"success": False, "error": str(e)}
             if not os.path.isfile(image_path):
@@ -441,12 +518,6 @@ class ImageService:
                         "with_frame": False}
         except Exception as e:
             return {"success": False, "error": str(e)}
-        finally:
-            if is_url:
-                try:
-                    os.unlink(image_path)
-                except OSError:
-                    pass
 
     def delete_image(self, image_name: str,
                      remove_frame: bool = True,
@@ -503,10 +574,10 @@ class ImageService:
                       verify_ssl: bool = False,
                       file_path: str = None) -> Dict[str, Any]:
         """Replace an image's graphic source, keeping frame/position."""
-        is_url = new_image_path.startswith(("http://", "https://"))
         try:
             try:
-                new_image_path = _maybe_download(new_image_path, verify_ssl)
+                new_image_path = self._resolve_image(
+                    new_image_path, verify_ssl)
             except ValueError as e:
                 return {"success": False, "error": str(e)}
             if not os.path.isfile(new_image_path):
@@ -550,12 +621,6 @@ class ImageService:
                     "new_source": new_image_path}
         except Exception as e:
             return {"success": False, "error": str(e)}
-        finally:
-            if is_url:
-                try:
-                    os.unlink(new_image_path)
-                except OSError:
-                    pass
 
     # ==================================================================
     # Text Frames

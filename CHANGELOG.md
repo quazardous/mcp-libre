@@ -6,6 +6,15 @@
   Group by Added / Changed / Fixed.
 -->
 
+## [2.3.2] - 2026-02-22
+
+### Added
+- **`download_image` tool** — pre-download images from URLs to local cache with retry (3 attempts), deduplication (URL hash), and logging. AI agents can download first, then insert — no more inline failures
+- **Image download cache** — same URL returns instantly on repeat calls. Uses stable temp filenames (MD5 hash of URL). `force=true` to re-download
+
+### Changed
+- `insert_image` and `replace_image` now use the shared download cache (no more temp file cleanup — cached files persist for the session)
+
 ## [2.3.1] - 2026-02-22
 
 ### Added
